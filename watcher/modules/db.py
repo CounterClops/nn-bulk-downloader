@@ -43,6 +43,12 @@ def init_db(db_path: str):
                 value TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tracked_artists (
+                url          TEXT PRIMARY KEY,
+                last_checked REAL
+            )
+        """)
     conn.close()
 
 
@@ -102,6 +108,29 @@ def update_comic_checked(
              WHERE url = ?
             """,
             (page_count, tags_json, cbz_path, title, node_id, time.time(), url),
+        )
+    conn.close()
+
+
+def get_artist_last_checked(db_path: str, url: str) -> Optional[float]:
+    conn = _connect(db_path)
+    row = conn.execute(
+        "SELECT last_checked FROM tracked_artists WHERE url = ?", (url,)
+    ).fetchone()
+    conn.close()
+    return row["last_checked"] if row else None
+
+
+def upsert_artist_checked(db_path: str, url: str):
+    conn = _connect(db_path)
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO tracked_artists (url, last_checked)
+            VALUES (?, ?)
+            ON CONFLICT(url) DO UPDATE SET last_checked = excluded.last_checked
+            """,
+            (url, time.time()),
         )
     conn.close()
 

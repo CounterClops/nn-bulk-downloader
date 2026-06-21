@@ -4,7 +4,7 @@ multporn-watcher — monitor comics/artists on multporn.net and keep local
 CBZ archives up-to-date.
 
 Usage:
-  python main.py [--config PATH] [--output DIR] [--db PATH] [--watch]
+  python main.py [--config PATH] [--watchlist PATH] [--output DIR] [--db PATH] [--watch]
 """
 
 import argparse
@@ -215,17 +215,10 @@ def run_once(config: Dict, db_path: str):
     output_dir = config["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
 
-    # Determine whether this cycle is a full check
+    # Interval used for per-comic and per-artist re-check gating
     interval_days = config.get("full_check_interval_days", 28)
-    last_full_check = float(db.get_setting(db_path, "last_full_check", "0"))
-    elapsed_days = (time.time() - last_full_check) / 86400
-    is_full_check = elapsed_days >= interval_days
-    if is_full_check:
-        logger.info(
-            f"Full-check cycle triggered "
-            f"(last was {elapsed_days:.1f} days ago, interval is {interval_days} days). "
-            f"All tracked comics will be verified directly."
-        )
+    full_check_interval_s = interval_days * 86400
+    now = time.time()
 
     # 1. Fetch the updated-comics feed to know which comics need attention
     updated_set: Set[str] = set()
@@ -242,7 +235,7 @@ def run_once(config: Dict, db_path: str):
     # 2. Expand watched items: register comics, discover artist catalogues
     # Sources: config watched_items + optional watchlist text file
     all_watched = list(config.get("watched_items", []))
-    watchlist_file = config.get("watchlist_file", "./watchlist.txt")
+    watchlist_file = config["watchlist_file"]
     file_items = wl.load_watchlist(watchlist_file)
     if file_items:
         logger.info(f"Loaded {len(file_items)} URL(s) from watchlist file: {watchlist_file}")
@@ -254,6 +247,18 @@ def run_once(config: Dict, db_path: str):
         item_type = item.get("type", "")
 
         if item_type == "artist":
+            artist_last_checked = db.get_artist_last_checked(db_path, url) or 0
+            artist_elapsed_days = (now - artist_last_checked) / 86400
+            if (now - artist_last_checked) < full_check_interval_s:
+                logger.info(
+                    f"Skipping artist page (checked {artist_elapsed_days:.1f}d ago, "
+                    f"interval is {interval_days}d): {url}"
+                )
+                # Still collect any comics already in DB that belong to this artist
+                # so they remain in watched_comics for the processing step.
+                for comic in db.get_all_comics(db_path):
+                    watched_comics.add(comic["url"])
+                continue
             logger.info(f"Fetching artist catalogue: {url}")
             try:
                 artist_comics = mp.fetch_artist_comics(session, url)
@@ -261,6 +266,7 @@ def run_once(config: Dict, db_path: str):
                 for comic_url in artist_comics:
                     watched_comics.add(comic_url)
                     db.upsert_comic(db_path, comic_url)
+                db.upsert_artist_checked(db_path, url)
             except Exception as exc:
                 logger.error(f"  Failed to fetch artist page: {exc}")
 
@@ -278,26 +284,55 @@ def run_once(config: Dict, db_path: str):
 
         never_downloaded = comic["page_count"] == 0
         in_updated_feed  = comic_url in updated_set
+        last_checked = comic.get("last_checked") or 0
+        due_for_full_check = (now - last_checked) >= full_check_interval_s
+        if due_for_full_check and not never_downloaded and not in_updated_feed:
+            elapsed = (now - last_checked) / 86400
+            logger.info(f"Full-check due for: {comic_url} (last checked {elapsed:.1f}d ago)")
 
         # Only hit the site if there's a reason to:
         #   - never downloaded yet (first run for this comic), OR
         #   - the updated feed says it changed, OR
-        #   - it's a scheduled full-check cycle
-        if not (never_downloaded or in_updated_feed or is_full_check):
+        #   - per-comic full-check interval has elapsed
+        if not (never_downloaded or in_updated_feed or due_for_full_check):
             continue
 
         _process_comic(session, comic_url, config, db_path, in_updated_feed=in_updated_feed)
         sleep(1)
 
-    # Persist full-check timestamp after a successful full-check cycle
-    if is_full_check:
-        db.set_setting(db_path, "last_full_check", str(time.time()))
-        logger.info("Full-check complete — timestamp saved to database.")
+    # Per-comic last_checked timestamps are updated by _process_comic() via
+    # update_comic_checked() — no global full-check timestamp needed.
 
 
 # ---------------------------------------------------------------------------
 # Entry points
 # ---------------------------------------------------------------------------
+
+
+def resolve_dirs() -> tuple:
+    """
+    Resolve config and data directories.
+
+    Priority for each:
+      1. ./config/  /  ./data/   — relative to CWD
+      2. /config/   /  /data/    — filesystem root (Docker / system install)
+      3. Create ./config/ and ./data/ in the CWD as a fallback.
+
+    Returns (config_dir, data_dir) as absolute paths.
+    """
+    def _find_or_create(local_rel: str, root_abs: str) -> str:
+        local_abs = os.path.abspath(local_rel)
+        if os.path.isdir(local_abs):
+            return local_abs
+        if os.path.isdir(root_abs):
+            return root_abs
+        os.makedirs(local_abs, exist_ok=True)
+        return local_abs
+
+    config_dir = _find_or_create("./config", "/config")
+    data_dir   = _find_or_create("./data",   "/data")
+    return config_dir, data_dir
+
 
 def run_watch(config: Dict, db_path: str):
     interval_s = int(config.get("poll_interval_minutes", 60)) * 60
@@ -317,28 +352,35 @@ def run_watch(config: Dict, db_path: str):
 
 
 def main():
+    config_dir, data_dir = resolve_dirs()
+
     parser = argparse.ArgumentParser(
         description="Multporn Comic Watcher — keep local CBZ archives up-to-date.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                             # one-shot run with ./config.json
-  python main.py --config ~/my_config.json  # custom config
-  python main.py --output ~/comics          # override output directory
-  python main.py --watch                    # run continuously as a daemon
+  python main.py                               # one-shot run, auto-detects config/ and data/
+  python main.py --config ~/my_config.json    # custom config path
+  python main.py --watchlist ~/watchlist.txt  # custom watchlist path
+  python main.py --output ~/comics            # override output directory
+  python main.py --watch                      # run continuously as a daemon
 """,
     )
     parser.add_argument(
-        "--config", default="./config.json",
-        help="Path to config file (default: ./config.json)",
+        "--config", default=os.path.join(config_dir, "config.json"),
+        help="Path to config file (default: <config_dir>/config.json)",
+    )
+    parser.add_argument(
+        "--watchlist", default=None,
+        help="Path to watchlist file — overrides watchlist_file in config",
     )
     parser.add_argument(
         "--output",
         help="Override the output_dir from config",
     )
     parser.add_argument(
-        "--db", default="./watcher.db",
-        help="Path to the SQLite state database (default: ./watcher.db)",
+        "--db", default=os.path.join(data_dir, "watcher.db"),
+        help="Path to the SQLite state database (default: <data_dir>/watcher.db)",
     )
     parser.add_argument(
         "--watch", action="store_true",
@@ -351,6 +393,12 @@ Examples:
     if args.output:
         config["output_dir"] = args.output
 
+    # Resolve watchlist: CLI flag > config.json key > resolved config_dir default
+    if args.watchlist:
+        config["watchlist_file"] = args.watchlist
+    elif not config.get("watchlist_file"):
+        config["watchlist_file"] = os.path.join(config_dir, "watchlist.txt")
+
     db_path = args.db
     db.init_db(db_path)
 
@@ -358,11 +406,16 @@ Examples:
     log_dir = os.path.dirname(os.path.abspath(db_path))
     logger.set_log_path(os.path.join(log_dir, "watcher.log"))
 
+    # Load watchlist once for the startup summary; run_once/run_watch reload it.
+    watchlist_path = config["watchlist_file"]
+    watchlist_items = wl.load_watchlist(watchlist_path)
+
     logger.info(f"multporn-watcher v{VERSION}")
-    logger.info(f"Output dir : {config['output_dir']}")
-    logger.info(f"Database   : {db_path}")
-    logger.info(f"Full check : every {config.get('full_check_interval_days', 28)} day(s)")
-    logger.info(f"Config items: {len(config.get('watched_items', []))} | Watchlist: {config.get('watchlist_file', './watchlist.txt')}")
+    logger.info(f"Output dir   : {config['output_dir']}")
+    logger.info(f"Database     : {db_path}")
+    logger.info(f"Full check   : every {config.get('full_check_interval_days', 28)} day(s)")
+    logger.info(f"Config items : {len(config.get('watched_items', []))}")
+    logger.info(f"Watchlist    : {watchlist_path} ({len(watchlist_items)} item(s))")
 
     if args.watch:
         run_watch(config, db_path)
