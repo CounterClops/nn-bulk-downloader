@@ -67,9 +67,9 @@ def _make_soup(content_value: str) -> BeautifulSoup:
 
 
 class TestExtractLanguage:
-    def test_returns_lowercase(self):
+    def test_returns_original_casing(self):
         soup = _make_soup("RU")
-        assert _extract_language(soup) == "ru"
+        assert _extract_language(soup) == "RU"
 
     def test_english(self):
         soup = _make_soup("en")
@@ -79,9 +79,9 @@ class TestExtractLanguage:
         soup = _make_soup("ru")
         assert _extract_language(soup) == "ru"
 
-    def test_bcp47_with_region_lowercased(self):
+    def test_bcp47_with_region_preserved(self):
         soup = _make_soup("en-US")
-        assert _extract_language(soup) == "en-us"
+        assert _extract_language(soup) == "en-US"
 
     def test_missing_meta_returns_empty(self):
         soup = BeautifulSoup("<html><head></head></html>", "lxml")
