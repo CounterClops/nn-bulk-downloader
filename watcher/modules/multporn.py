@@ -116,7 +116,14 @@ def _extract_author(soup: BeautifulSoup) -> str:
 
 
 def _extract_language(soup: BeautifulSoup) -> str:
-    """Return the BCP-47 language code from the dcterms.language meta tag (e.g. 'en', 'ru')."""
+    """Return the language code from the dcterms.language meta tag, fully lowercased.
+
+    The raw value is a BCP-47 tag (e.g. 'en', 'ru', 'en-US'). It is returned
+    fully lowercased (e.g. 'en-us') so that callers can perform
+    case-insensitive comparisons without extra normalisation. Primary-subtag
+    comparison (split on '-') is recommended for matching config values like
+    'en' against page values like 'en-us'.
+    """
     tag = soup.find("meta", attrs={"name": "dcterms.language"})
     if tag and tag.get("content"):
         return tag["content"].strip().lower()

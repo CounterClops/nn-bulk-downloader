@@ -50,6 +50,12 @@ def _validate(config: Dict):
     allowed_languages = config.get("allowed_languages")
     if not isinstance(allowed_languages, list):
         errors.append("'allowed_languages' must be a list of BCP-47 language codes (e.g. [\"en\"])")
+    else:
+        for i, lang in enumerate(allowed_languages):
+            if not isinstance(lang, str) or not lang.strip():
+                errors.append(
+                    f"'allowed_languages[{i}]' must be a non-empty string (e.g. \"en\", \"zh\")"
+                )
 
     watched = config.get("watched_items")
     if not isinstance(watched, list):

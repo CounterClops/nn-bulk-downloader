@@ -28,9 +28,15 @@ def init_db(db_path: str):
                 tags_json   TEXT    DEFAULT '[]',
                 last_checked REAL,
                 first_seen  REAL    NOT NULL,
-                is_blacklisted INTEGER DEFAULT 0
+                is_blacklisted INTEGER DEFAULT 0,
+                skip_reason TEXT
             )
         """)
+        # Migration: add skip_reason to databases created before this column existed
+        try:
+            conn.execute("ALTER TABLE tracked_comics ADD COLUMN skip_reason TEXT")
+        except Exception:
+            pass  # column already exists
         conn.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,

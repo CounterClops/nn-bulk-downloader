@@ -35,6 +35,10 @@ def warn(message: str):
     _write(f"[{ts}] [WARN] {message}")
 
 
+# Alias matching Python logging convention
+warning = warn
+
+
 def error(message: str):
     ts = _timestamp()
     print(f"[{colored(ts, 'cyan')}] [{colored('ERROR', 'red')}] {message}", file=sys.stderr)

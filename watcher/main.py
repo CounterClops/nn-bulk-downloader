@@ -49,13 +49,19 @@ def _is_blacklisted(tags: list, blacklist: list) -> bool:
 
 
 def _is_language_allowed(language: str, allowed_languages: list) -> bool:
-    """Return True if *language* is in the allowed list, or the list is empty (allow all)."""
+    """Return True if *language* is in the allowed list, or the list is empty (allow all).
+
+    Comparison is done on the primary language subtag so that a config entry of
+    ``"en"`` matches both ``"en"`` and ``"en-us"`` (or ``"en-US"`` from the site).
+    An unknown/empty *language* is allowed by default to avoid silently dropping
+    content whose language the site has not declared.
+    """
     if not allowed_languages:
         return True
     if not language:
-        # Language unknown — allow by default so we don't silently drop content
         return True
-    return language.lower() in {lang.lower() for lang in allowed_languages}
+    page_primary = language.split("-")[0].lower()
+    return page_primary in {lang.split("-")[0].lower() for lang in allowed_languages}
 
 
 # ---------------------------------------------------------------------------
@@ -105,21 +111,21 @@ def _process_comic(
 
     # Language filter check
     if not _is_language_allowed(language, allowed_languages):
-        logger.warn(
+        logger.warning(
             f"  '{title}' is language '{language}' — not in allowed_languages {allowed_languages}. Skipping."
         )
         db.upsert_comic(
             db_path, url,
-            title=title, is_blacklisted=1, tags_json=json.dumps(tags),
+            title=title, is_blacklisted=1, skip_reason="language", tags_json=json.dumps(tags),
         )
         return
 
     # Tag blacklist check
     if _is_blacklisted(tags, blacklist):
-        logger.warn(f"  '{title}' matches blacklisted tag — skipping and marking.")
+        logger.warning(f"  '{title}' matches blacklisted tag — skipping and marking.")
         db.upsert_comic(
             db_path, url,
-            title=title, is_blacklisted=1, tags_json=json.dumps(tags),
+            title=title, is_blacklisted=1, skip_reason="tag", tags_json=json.dumps(tags),
         )
         return
 
