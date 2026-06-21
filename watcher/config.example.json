@@ -4,6 +4,7 @@
   "poll_interval_minutes": 60,
   "full_check_interval_days": 28,
   "blacklisted_tags": [],
+  "allowed_languages": ["en"],
   "check_updated_feed": true,
   "updated_feed_pages": 2,
   "watched_items": []

@@ -48,6 +48,16 @@ def _is_blacklisted(tags: list, blacklist: list) -> bool:
     return any(b.lower() in tags_lower for b in blacklist)
 
 
+def _is_language_allowed(language: str, allowed_languages: list) -> bool:
+    """Return True if *language* is in the allowed list, or the list is empty (allow all)."""
+    if not allowed_languages:
+        return True
+    if not language:
+        # Language unknown — allow by default so we don't silently drop content
+        return True
+    return language.lower() in {lang.lower() for lang in allowed_languages}
+
+
 # ---------------------------------------------------------------------------
 # Per-comic processing
 # ---------------------------------------------------------------------------
@@ -74,6 +84,7 @@ def _process_comic(
     inside the CBZ as ``NNN.ext.archive_K`` rather than deleted.
     """
     blacklist = config.get("blacklisted_tags", [])
+    allowed_languages = config.get("allowed_languages", ["en"])
     output_dir = config["output_dir"]
 
     existing = db.get_comic(db_path, url)
@@ -88,8 +99,20 @@ def _process_comic(
     title = meta["title"]
     tags = meta["tags"]
     author = meta["author"]
+    language = meta["language"]
     image_urls = meta["image_urls"]
     remote_count = meta["page_count"]
+
+    # Language filter check
+    if not _is_language_allowed(language, allowed_languages):
+        logger.warn(
+            f"  '{title}' is language '{language}' — not in allowed_languages {allowed_languages}. Skipping."
+        )
+        db.upsert_comic(
+            db_path, url,
+            title=title, is_blacklisted=1, tags_json=json.dumps(tags),
+        )
+        return
 
     # Tag blacklist check
     if _is_blacklisted(tags, blacklist):

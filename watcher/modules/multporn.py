@@ -115,6 +115,14 @@ def _extract_author(soup: BeautifulSoup) -> str:
     return ""
 
 
+def _extract_language(soup: BeautifulSoup) -> str:
+    """Return the BCP-47 language code from the dcterms.language meta tag (e.g. 'en', 'ru')."""
+    tag = soup.find("meta", attrs={"name": "dcterms.language"})
+    if tag and tag.get("content"):
+        return tag["content"].strip().lower()
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -122,7 +130,7 @@ def _extract_author(soup: BeautifulSoup) -> str:
 def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
     """
     Return a dict with keys:
-      node_id, title, author, tags, image_urls, page_count
+      node_id, title, author, tags, language, image_urls, page_count
     """
     parts = url.rstrip("/").split("/")
     if len(parts) < 4:
@@ -143,6 +151,7 @@ def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
     title = _extract_title(soup) or parts[-1].replace("-", " ").replace("_", " ")
     tags = _extract_tags(soup)
     author = _extract_author(soup)
+    language = _extract_language(soup)
 
     sleep(1)  # polite pause between page fetch and XML fetch
 
@@ -164,6 +173,7 @@ def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
         "title": title,
         "author": author,
         "tags": tags,
+        "language": language,
         "image_urls": image_urls,
         "page_count": len(image_urls),
     }
