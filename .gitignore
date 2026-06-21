@@ -223,4 +223,5 @@ data/
 media/
 config.json
 watcher.db
+watcher.log
 watchlist.txt

@@ -106,9 +106,10 @@ def _extract_tags(soup: BeautifulSoup) -> List[str]:
 
 
 def _extract_author(soup: BeautifulSoup) -> str:
-    """Return the first author name found by looking for /comic_author/ links."""
+    """Return the first author name found by looking for artist page links."""
     for a in soup.find_all("a", href=True):
-        if "/comic_author/" in a["href"]:
+        href = a["href"]
+        if "/comic_author/" in href or "/authors_comics/" in href:
             name = a.get_text(strip=True)
             if name:
                 return name

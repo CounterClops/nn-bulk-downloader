@@ -39,8 +39,14 @@ def _make_session() -> requests.Session:
     return session
 
 
-def _cbz_path_for(output_dir: str, title: str) -> str:
-    return os.path.join(output_dir, cbz.sanitize_filename(title) + ".cbz")
+def _cbz_path_for(output_dir: str, title: str, author: str = "") -> str:
+    sanitized_title = cbz.sanitize_filename(title)
+    if author:
+        sanitized_author = cbz.sanitize_filename(author)
+        filename = f"[{sanitized_author}]_{sanitized_title}"
+    else:
+        filename = sanitized_title
+    return os.path.join(output_dir, filename + ".cbz")
 
 
 def _is_blacklisted(tags: list, blacklist: list) -> bool:
@@ -131,7 +137,7 @@ def _process_comic(
 
     local_count = (existing or {}).get("page_count", 0)
     cbz_path = (
-        (existing or {}).get("cbz_path") or _cbz_path_for(output_dir, title)
+        (existing or {}).get("cbz_path") or _cbz_path_for(output_dir, title, author)
     )
 
     # Decide whether a sync is needed
