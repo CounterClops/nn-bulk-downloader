@@ -1,0 +1,13 @@
+services:
+  multporn-watcher:
+    build: .
+    container_name: multporn-watcher
+    restart: unless-stopped
+    volumes:
+      # config/config.json  — copy from config.example.json and edit
+      # config/watchlist.txt — copy from watchlist.example.txt and add URLs
+      - ./config:/config
+      # State database and watcher.log
+      - ./data:/data
+      # Downloaded CBZ files
+      - ./media:/media

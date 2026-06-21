@@ -1,0 +1,13 @@
+# multporn-watcher watchlist
+# ─────────────────────────────────────────────────────────────────────────────
+# Add one URL per line. The type (comic or artist) is detected automatically.
+# Lines starting with # are comments. Inline # comments are also supported.
+# Blank lines are ignored.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Single comics
+# https://multporn.net/comics/my-favourite-comic
+# https://multporn.net/hentai_manga/some-manga
+
+# Artist / author pages (all comics are discovered automatically)
+# https://multporn.net/comic_author/some-artist

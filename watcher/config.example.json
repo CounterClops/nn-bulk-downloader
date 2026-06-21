@@ -1,0 +1,10 @@
+{
+  "output_dir": "/media",
+  "watchlist_file": "/config/watchlist.txt",
+  "poll_interval_minutes": 60,
+  "full_check_interval_days": 28,
+  "blacklisted_tags": [],
+  "check_updated_feed": true,
+  "updated_feed_pages": 2,
+  "watched_items": []
+}

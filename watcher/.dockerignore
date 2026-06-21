@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Runtime state — mount these as volumes instead
+*.db
+*.log
+watcher.db
+watcher.log
+
+# Local config and watchlist — mount via ./config volume
+config.json
+watchlist.txt
+
+# Downloaded media — mount via ./media volume
+media/
+
+# Docker build context folders
+config/
+data/
