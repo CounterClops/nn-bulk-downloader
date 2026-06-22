@@ -164,6 +164,21 @@ def upsert_artist_checked(db_path: str, url: str):
     conn.close()
 
 
+def clear_blacklisted_by_reason(db_path: str, skip_reason: str):
+    """Clear is_blacklisted for all comics whose skip_reason matches.
+
+    Used when a config setting is disabled between runs — previously skipped
+    comics are unblocked so they are re-evaluated against the current config.
+    """
+    conn = _connect(db_path)
+    with conn:
+        conn.execute(
+            "UPDATE tracked_comics SET is_blacklisted = 0, skip_reason = NULL WHERE skip_reason = ?",
+            (skip_reason,),
+        )
+    conn.close()
+
+
 def get_setting(db_path: str, key: str, default: Optional[str] = None) -> Optional[str]:
     conn = _connect(db_path)
     row = conn.execute(

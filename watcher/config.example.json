@@ -5,6 +5,7 @@
   "full_check_interval_days": 28,
   "blacklisted_tags": [],
   "allowed_languages": ["en"],
+  "exclude_censored": false,
   "check_updated_feed": true,
   "updated_feed_pages": 2,
   "watched_items": []

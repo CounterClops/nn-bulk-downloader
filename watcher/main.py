@@ -66,6 +66,12 @@ def _is_blacklisted(tags: list, blacklist: list) -> bool:
     return any(b.lower() in tags_lower for b in blacklist)
 
 
+def _is_censored(tags: list) -> bool:
+    """Return True if *tags* indicate this is a censored/minor-content comic."""
+    tags_lower = {t.lower() for t in tags}
+    return bool(tags_lower & mp.CENSORED_TAGS)
+
+
 def _is_language_allowed(language: str, allowed_languages: list) -> bool:
     """Return True if *language* is in the allowed list, or the list is empty (allow all).
 
@@ -109,6 +115,7 @@ def _process_comic(
     """
     blacklist = config.get("blacklisted_tags", [])
     allowed_languages = config.get("allowed_languages", ["en"])
+    exclude_censored = config.get("exclude_censored", False)
     output_dir = config["output_dir"]
 
     existing = db.get_comic(db_path, url)
@@ -144,6 +151,15 @@ def _process_comic(
         db.upsert_comic(
             db_path, url,
             title=title, is_blacklisted=1, skip_reason="tag", tags_json=json.dumps(tags),
+        )
+        return
+
+    # Censored content check
+    if exclude_censored and _is_censored(tags):
+        logger.warning(f"  '{title}' is censored content (minor characters) — skipping and marking.")
+        db.upsert_comic(
+            db_path, url,
+            title=title, is_blacklisted=1, skip_reason="censored", tags_json=json.dumps(tags),
         )
         return
 
@@ -292,6 +308,13 @@ def run_once(config: Dict, db_path: str):
     full_check_interval_s = interval_days * 86400
     now = time.time()
 
+    exclude_censored = config.get("exclude_censored", False)
+
+    # If censored exclusion is currently OFF, lift any previously-applied censored
+    # skip so those comics are re-evaluated against the current config this run.
+    if not exclude_censored:
+        db.clear_blacklisted_by_reason(db_path, "censored")
+
     # 1. Fetch the updated-comics feed to know which comics need attention
     updated_set: Set[str] = set()
     if config.get("check_updated_feed", True):
@@ -333,7 +356,7 @@ def run_once(config: Dict, db_path: str):
                 continue
             logger.info(f"Fetching artist catalogue: {url}")
             try:
-                artist_comics = mp.fetch_artist_comics(session, url)
+                artist_comics = mp.fetch_artist_comics(session, url, exclude_censored=exclude_censored)
                 logger.info(f"  Found {len(artist_comics)} comic(s).")
                 for comic_url in artist_comics:
                     watched_comics.add(comic_url)

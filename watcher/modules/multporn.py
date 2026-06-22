@@ -9,6 +9,9 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://multporn.net"
 
+# Tags that indicate censored content (matched case-insensitively)
+CENSORED_TAGS: frozenset = frozenset({"mini girl", "mini male"})
+
 # Maps URL path segment → Juicebox field type
 CONTENT_TYPES = {
     "comics":           "field_com_pages",
@@ -185,12 +188,20 @@ def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
     }
 
 
-def fetch_artist_comics(session: requests.Session, url: str) -> List[str]:
+def fetch_artist_comics(
+    session: requests.Session,
+    url: str,
+    exclude_censored: bool = False,
+) -> List[str]:
     """Return all comic URLs found on an artist page, following Drupal pagination.
 
     Drupal uses non-sequential page tokens (e.g. ``?page=0%2C1``) rather than
     simple integers, so we follow the ``pager-next`` link href directly instead
     of constructing page numbers manually.
+
+    When *exclude_censored* is True, comics whose listing preview thumbnail uses
+    the ``blur_comics`` image style (the site's censored-content marker) are
+    omitted from the results.
     """
     comic_urls: List[str] = []
     seen: set = set()
@@ -201,6 +212,20 @@ def fetch_artist_comics(session: requests.Session, url: str) -> List[str]:
         resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "lxml")
+
+        # Build a set of URLs whose preview thumbnail is blurred (censored).
+        # The site uses styles/blur_comics/ in the <img src> for these entries.
+        censored_hrefs: set = set()
+        if exclude_censored:
+            for img in soup.find_all("img", src=True):
+                if "blur_comics" in img["src"]:
+                    parent_a = img.find_parent("a", href=True)
+                    if parent_a:
+                        href = parent_a["href"]
+                        if href.startswith("/"):
+                            href = BASE_URL + href
+                        censored_hrefs.add(_normalise(href))
+
         found_on_page = 0
 
         for a in soup.find_all("a", href=True):
@@ -213,6 +238,8 @@ def fetch_artist_comics(session: requests.Session, url: str) -> List[str]:
             parts = href.rstrip("/").split("/")
             if len(parts) >= 5 and parts[3] in COMIC_PATH_SEGMENTS:
                 norm = _normalise(href)
+                if norm in censored_hrefs:
+                    continue
                 if norm not in seen:
                     comic_urls.append(norm)
                     seen.add(norm)

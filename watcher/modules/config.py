@@ -12,6 +12,7 @@ DEFAULTS: Dict = {
     "updated_feed_pages": 2,
     "watchlist_file": "./watchlist.txt",
     "full_check_interval_days": 28,
+    "exclude_censored": False,
     "watched_items": [],
 }
 
@@ -46,6 +47,9 @@ def _validate(config: Dict):
 
     if not isinstance(config.get("blacklisted_tags"), list):
         errors.append("'blacklisted_tags' must be a list of strings")
+
+    if not isinstance(config.get("exclude_censored"), bool):
+        errors.append("'exclude_censored' must be true or false")
 
     allowed_languages = config.get("allowed_languages")
     if not isinstance(allowed_languages, list):
