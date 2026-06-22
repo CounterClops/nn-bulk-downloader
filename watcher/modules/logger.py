@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 from datetime import datetime
 from termcolor import colored
 
@@ -43,6 +44,15 @@ def error(message: str):
     ts = _timestamp()
     print(f"[{colored(ts, 'cyan')}] [{colored('ERROR', 'red')}] {message}", file=sys.stderr)
     _write(f"[{ts}] [ERROR] {message}")
+
+
+def exception(message: str):
+    """Log an error message followed by the current exception traceback."""
+    ts = _timestamp()
+    tb = traceback.format_exc()
+    full = f"{message}\n{tb.rstrip()}"
+    print(f"[{colored(ts, 'cyan')}] [{colored('ERROR', 'red')}] {full}", file=sys.stderr)
+    _write(f"[{ts}] [ERROR] {full}")
 
 
 def debug(message: str):

@@ -23,6 +23,7 @@ def init_db(db_path: str):
                 url         TEXT    UNIQUE NOT NULL,
                 title       TEXT,
                 cbz_path    TEXT,
+                cbz_hash    TEXT,
                 node_id     TEXT,
                 page_count  INTEGER DEFAULT 0,
                 tags_json   TEXT    DEFAULT '[]',
@@ -32,11 +33,16 @@ def init_db(db_path: str):
                 skip_reason TEXT
             )
         """)
-        # Migration: add skip_reason to databases created before this column existed
-        try:
-            conn.execute("ALTER TABLE tracked_comics ADD COLUMN skip_reason TEXT")
-        except Exception:
-            pass  # column already exists
+        # Migrations: add columns to databases created before they existed
+        for col, definition in [
+            ("skip_reason", "TEXT"),
+            ("cbz_hash",    "TEXT"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE tracked_comics ADD COLUMN {col} {definition}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
         conn.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
@@ -93,6 +99,7 @@ def update_comic_checked(
     cbz_path: str,
     title: str,
     node_id: str,
+    cbz_hash: Optional[str] = None,
 ):
     conn = _connect(db_path)
     with conn:
@@ -104,12 +111,34 @@ def update_comic_checked(
                    cbz_path     = ?,
                    title        = ?,
                    node_id      = ?,
-                   last_checked = ?
+                   last_checked = ?,
+                   cbz_hash     = COALESCE(?, cbz_hash)
              WHERE url = ?
             """,
-            (page_count, tags_json, cbz_path, title, node_id, time.time(), url),
+            (page_count, tags_json, cbz_path, title, node_id, time.time(), cbz_hash, url),
         )
     conn.close()
+
+
+def update_comic_hash(db_path: str, url: str, cbz_hash: str):
+    """Store a newly computed hash for an existing comic entry."""
+    conn = _connect(db_path)
+    with conn:
+        conn.execute(
+            "UPDATE tracked_comics SET cbz_hash = ? WHERE url = ?",
+            (cbz_hash, url),
+        )
+    conn.close()
+
+
+def get_comics_missing_hash(db_path: str) -> List[Dict]:
+    """Return comics that have a cbz_path but no cbz_hash yet (url and cbz_path only)."""
+    conn = _connect(db_path)
+    rows = conn.execute(
+        "SELECT url, cbz_path FROM tracked_comics WHERE cbz_path IS NOT NULL AND cbz_hash IS NULL"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def get_artist_last_checked(db_path: str, url: str) -> Optional[float]:
