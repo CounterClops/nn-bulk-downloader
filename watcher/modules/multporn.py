@@ -1,6 +1,7 @@
 import re
 from time import sleep
 from typing import Dict, List, Optional, Set
+from urllib.parse import urljoin
 
 import requests
 import xmltodict
@@ -185,14 +186,18 @@ def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
 
 
 def fetch_artist_comics(session: requests.Session, url: str) -> List[str]:
-    """Return all comic URLs found on an artist page, following Drupal pagination."""
+    """Return all comic URLs found on an artist page, following Drupal pagination.
+
+    Drupal uses non-sequential page tokens (e.g. ``?page=0%2C1``) rather than
+    simple integers, so we follow the ``pager-next`` link href directly instead
+    of constructing page numbers manually.
+    """
     comic_urls: List[str] = []
     seen: set = set()
-    page = 0
+    next_url: Optional[str] = url
 
-    while True:
-        page_url = f"{url}?page={page}" if page > 0 else url
-        resp = session.get(page_url)
+    while next_url:
+        resp = session.get(next_url)
         resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "lxml")
@@ -213,14 +218,18 @@ def fetch_artist_comics(session: requests.Session, url: str) -> List[str]:
                     seen.add(norm)
                     found_on_page += 1
 
-        # Stop if no comics found or no pager-next link
         if found_on_page == 0:
             break
+
         next_li = soup.find("li", class_="pager-next")
         if not next_li:
             break
+        next_a = next_li.find("a", href=True)
+        if not next_a:
+            break
 
-        page += 1
+        next_href = next_a["href"]
+        next_url = urljoin(resp.url, next_href)
         sleep(2)
 
     return comic_urls

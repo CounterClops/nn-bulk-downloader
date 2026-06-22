@@ -49,6 +49,18 @@ def _cbz_path_for(output_dir: str, title: str, author: str = "") -> str:
     return os.path.join(output_dir, filename + ".cbz")
 
 
+def _make_rel_cbz(output_dir: str, abs_path: str) -> str:
+    """Convert an absolute CBZ path to a path relative to output_dir."""
+    return os.path.relpath(abs_path, output_dir)
+
+
+def _resolve_abs_cbz(output_dir: str, raw: str) -> str:
+    """Resolve a stored cbz_path (relative or legacy absolute) to an absolute path."""
+    if os.path.isabs(raw):
+        return raw
+    return os.path.normpath(os.path.join(output_dir, raw))
+
+
 def _is_blacklisted(tags: list, blacklist: list) -> bool:
     tags_lower = {t.lower() for t in tags}
     return any(b.lower() in tags_lower for b in blacklist)
@@ -136,9 +148,11 @@ def _process_comic(
         return
 
     local_count = (existing or {}).get("page_count", 0)
-    cbz_path = (
-        (existing or {}).get("cbz_path") or _cbz_path_for(output_dir, title, author)
-    )
+    raw_path = (existing or {}).get("cbz_path") or ""
+    if raw_path:
+        cbz_path = _resolve_abs_cbz(output_dir, raw_path)
+    else:
+        cbz_path = _cbz_path_for(output_dir, title, author)
 
     # Decide whether a sync is needed
     counts_changed = remote_count != local_count
@@ -147,9 +161,31 @@ def _process_comic(
     if not needs_sync:
         logger.info(f"  '{title}' is up to date ({local_count} pages).")
         db.update_comic_checked(
-            db_path, url, local_count, json.dumps(tags), cbz_path, title, meta["node_id"]
+            db_path, url, local_count, json.dumps(tags),
+            _make_rel_cbz(output_dir, cbz_path), title, meta["node_id"],
         )
         return
+
+    # If the CBZ already exists on disk, check whether it already contains all
+    # remote pages before downloading anything.
+    if local_count == 0 and os.path.exists(cbz_path):
+        disk_count = cbz.get_cbz_page_count(cbz_path)
+        if disk_count >= remote_count:
+            logger.info(
+                f"  '{title}' CBZ exists on disk with {disk_count} page(s) "
+                f"(remote: {remote_count}) — skipping download."
+            )
+            cbz_hash = cbz.hash_cbz(cbz_path)
+            db.update_comic_checked(
+                db_path, url, disk_count, json.dumps(tags),
+                _make_rel_cbz(output_dir, cbz_path), title, meta["node_id"],
+                cbz_hash=cbz_hash,
+            )
+            return
+        # File exists but is incomplete — fall through to sync
+        logger.info(
+            f"  '{title}' CBZ exists but has {disk_count}/{remote_count} page(s) — syncing."
+        )
 
     logger.info(
         f"  '{title}': downloading all {remote_count} page(s) for sync "
@@ -206,10 +242,40 @@ def _process_comic(
         logger.info(f"  {archived} page(s) replaced/removed on site — archived inside CBZ.")
 
     final_count = stats["live_pages"]
+    cbz_hash = cbz.hash_cbz(cbz_path)
     db.update_comic_checked(
-        db_path, url, final_count, json.dumps(tags), cbz_path, title, meta["node_id"]
+        db_path, url, final_count, json.dumps(tags),
+        _make_rel_cbz(output_dir, cbz_path), title, meta["node_id"],
+        cbz_hash=cbz_hash,
     )
     logger.info(f"  Done: '{title}' — {final_count} live page(s), {archived} archived.")
+
+
+# ---------------------------------------------------------------------------
+# Hash backfill
+# ---------------------------------------------------------------------------
+
+def _backfill_hashes(config: Dict, db_path: str):
+    """Hash any CBZ files that are missing a hash in the DB."""
+    output_dir = config["output_dir"]
+    missing = db.get_comics_missing_hash(db_path)
+    if not missing:
+        return
+    logger.info(f"Backfilling hashes for {len(missing)} comic(s) …")
+    for comic in missing:
+        raw_path = comic.get("cbz_path") or ""
+        if not raw_path:
+            continue
+        abs_path = _resolve_abs_cbz(output_dir, raw_path)
+        if not os.path.exists(abs_path):
+            logger.warning(f"  CBZ not found for hash backfill: {abs_path}")
+            continue
+        try:
+            cbz_hash = cbz.hash_cbz(abs_path)
+            db.update_comic_hash(db_path, comic["url"], cbz_hash)
+            logger.info(f"  Hashed: {abs_path}")
+        except Exception as exc:
+            logger.exception(f"  Failed to hash {abs_path}: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +374,8 @@ def run_once(config: Dict, db_path: str):
 
     # Per-comic last_checked timestamps are updated by _process_comic() via
     # update_comic_checked() — no global full-check timestamp needed.
+
+    _backfill_hashes(config, db_path)
 
 
 # ---------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import hashlib
 import io
 import os
 import re
@@ -238,6 +239,15 @@ def sync_cbz(
         "pages_archived":  len(new_archives),
         "pages_unchanged": unchanged_count,
     }
+
+
+def hash_cbz(cbz_path: str) -> str:
+    """Return the SHA-256 hex digest of the CBZ file, streamed in chunks."""
+    h = hashlib.sha256()
+    with open(cbz_path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def get_cbz_page_count(cbz_path: str) -> int:
