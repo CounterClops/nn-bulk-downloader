@@ -1,11 +1,8 @@
 """Tests for censored-content detection and config re-evaluation logic."""
 
-import sys
 import os
 import sqlite3
 import tempfile
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from main import _is_censored
 from modules import db

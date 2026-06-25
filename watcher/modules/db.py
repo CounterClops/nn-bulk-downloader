@@ -28,6 +28,7 @@ def init_db(db_path: str):
                 page_count  INTEGER DEFAULT 0,
                 tags_json   TEXT    DEFAULT '[]',
                 last_checked REAL,
+                last_synced  REAL,
                 first_seen  REAL    NOT NULL,
                 is_blacklisted INTEGER DEFAULT 0,
                 skip_reason TEXT
@@ -37,6 +38,7 @@ def init_db(db_path: str):
         for col, definition in [
             ("skip_reason", "TEXT"),
             ("cbz_hash",    "TEXT"),
+            ("last_synced", "REAL"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE tracked_comics ADD COLUMN {col} {definition}")
@@ -100,6 +102,7 @@ def update_comic_checked(
     title: str,
     node_id: str,
     cbz_hash: Optional[str] = None,
+    last_synced: Optional[float] = None,
 ):
     conn = _connect(db_path)
     with conn:
@@ -112,10 +115,11 @@ def update_comic_checked(
                    title        = ?,
                    node_id      = ?,
                    last_checked = ?,
-                   cbz_hash     = COALESCE(?, cbz_hash)
+                   cbz_hash     = COALESCE(?, cbz_hash),
+                   last_synced  = COALESCE(?, last_synced)
              WHERE url = ?
             """,
-            (page_count, tags_json, cbz_path, title, node_id, time.time(), cbz_hash, url),
+            (page_count, tags_json, cbz_path, title, node_id, time.time(), cbz_hash, last_synced, url),
         )
     conn.close()
 

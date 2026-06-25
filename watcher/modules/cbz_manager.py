@@ -10,7 +10,16 @@ from typing import Dict, List, Tuple
 import imagehash
 from PIL import Image
 
+from modules import logger
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+# Same extensions without the leading dot, for fast ext-string validation.
+_VALID_EXT = {e.lstrip(".") for e in IMAGE_EXTENSIONS}
+
+# Exceptions that indicate a file could not be decoded as an image; these are
+# expected when pHash encounters an unsupported format and trigger the SHA-256
+# fallback without any warning.
+_PHASH_DECODE_ERRORS = (OSError, SyntaxError, ValueError)
 
 
 def sanitize_filename(name: str) -> str:
@@ -18,6 +27,29 @@ def sanitize_filename(name: str) -> str:
     clean = re.sub(r'[:*?"<>|\\/$#@&%!`^(){}[\]=+~,;]', "", name)
     clean = clean.replace(" ", "_")
     return clean[:90].strip("._") or "comic"
+
+
+def _safe_arcname(hint: str, fallback: str) -> str:
+    """
+    Return a safe zip arcname from *hint*.
+
+    Rules enforced:
+    - Stripped to basename only — any directory components (including ``..``)
+      are discarded, so path traversal is impossible regardless of input.
+    - Must be non-empty after stripping; falls back to *fallback* otherwise.
+    - Legacy bare-extension hints like ``img.jpg`` also fall back to *fallback*.
+
+    The result is a plain filename with no path separators, safe for use as a
+    CBZ archive entry name.
+    """
+    # Normalize backslashes to forward slashes, then take only the last
+    # component (basename), discarding any directory prefix (including "..").
+    cleaned = hint.replace("\\", "/")
+    # Take only the last component (basename); this discards any ".." segments
+    basename = cleaned.rstrip("/").rpartition("/")[-1]
+    if basename in ("", ".", "..") or basename.lower().startswith("img."):
+        return fallback
+    return basename
 
 
 def generate_comic_info_xml(metadata: Dict) -> bytes:
@@ -84,8 +116,13 @@ def create_cbz(
     try:
         with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for i, (hint, src_path) in enumerate(image_paths, start=1):
-                ext = hint.rpartition(".")[-1].lower() or "jpg"
-                zf.write(src_path, arcname=f"{i:03d}.{ext}")
+                raw_ext = hint.rpartition(".")[-1].lower()
+                ext = raw_ext if raw_ext in _VALID_EXT else "jpg"
+                fallback = f"{i:04d}.{ext}"
+                # _safe_arcname normalizes to basename, discards any directory
+                # components, and falls back for legacy bare-extension hints like "img.jpg".
+                arcname = _safe_arcname(hint, fallback)
+                zf.write(src_path, arcname=arcname)
 
             metadata = dict(metadata)
             metadata["page_count"] = len(image_paths)
@@ -108,19 +145,40 @@ def update_cbz(
 
 
 def _compute_phash(image_path: str) -> "imagehash.ImageHash":
-    img = Image.open(image_path).convert("RGB")
+    with Image.open(image_path) as im:
+        img = im.convert("RGB")
     return imagehash.phash(img)
+
+
+def _file_sha256(path: str) -> str:
+    """Return the SHA-256 hex digest of a file, streamed in chunks."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def images_visually_same(path1: str, path2: str, threshold: int = 10) -> bool:
     """
-    Return True if two image files are perceptually identical (pHash Hamming
-    distance ≤ threshold).  A threshold of 10 tolerates minor JPEG
-    re-compression artefacts while flagging genuinely replaced images.
-    Falls back to False on any error (treats as different).
+    Return True if two image files are perceptually identical.
+
+    Primary method: pHash Hamming distance <= threshold (tolerates minor JPEG
+    re-compression artefacts while flagging genuinely replaced images).
+
+    Fallback: if pHash cannot decode the file (e.g. an animated GIF frame that
+    PIL cannot process, or any unsupported format), falls back to a byte-exact
+    SHA-256 comparison.  This avoids incorrectly treating identical files as
+    changed and unnecessarily archiving them.
     """
     try:
-        return (_compute_phash(path1) - _compute_phash(path2)) <= threshold
+        return bool((_compute_phash(path1) - _compute_phash(path2)) <= threshold)
+    except _PHASH_DECODE_ERRORS:
+        pass  # expected decode failure — fall through to SHA-256 comparison
+    except Exception as exc:
+        logger.warning(f"Unexpected error during pHash comparison: {exc}")
+    try:
+        return _file_sha256(path1) == _file_sha256(path2)
     except Exception:
         return False
 
@@ -190,8 +248,10 @@ def sync_cbz(
             if has_ex and has_re:
                 ex_name, ex_path = existing_pages[i]
                 hint, re_path = remote_image_paths[i]
-                ext = hint.rpartition(".")[-1].lower() or "jpg"
-                target = f"{pnum:03d}.{ext}"
+                raw_ext = hint.rpartition(".")[-1].lower()
+                ext = raw_ext if raw_ext in _VALID_EXT else "jpg"
+                fallback = f"{pnum:04d}.{ext}"
+                target = _safe_arcname(hint, fallback)
 
                 if images_visually_same(ex_path, re_path, phash_threshold):
                     new_pages.append((target, ex_path))
@@ -212,8 +272,10 @@ def sync_cbz(
             else:
                 # New page on remote that we didn't have
                 hint, re_path = remote_image_paths[i]
-                ext = hint.rpartition(".")[-1].lower() or "jpg"
-                new_pages.append((f"{pnum:03d}.{ext}", re_path))
+                raw_ext = hint.rpartition(".")[-1].lower()
+                ext = raw_ext if raw_ext in _VALID_EXT else "jpg"
+                fallback = f"{pnum:04d}.{ext}"
+                new_pages.append((_safe_arcname(hint, fallback), re_path))
 
         try:
             with zipfile.ZipFile(tmp_cbz, "w", zipfile.ZIP_DEFLATED) as dst:

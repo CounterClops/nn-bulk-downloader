@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Add the watcher directory to sys.path so that tests can import
+# "main" and "modules.*" directly without per-file sys.path hacks.
+pythonpath = ["."]
+testpaths = ["tests"]

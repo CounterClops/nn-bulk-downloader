@@ -92,11 +92,51 @@ def _is_language_allowed(language: str, allowed_languages: list) -> bool:
 # Per-comic processing
 # ---------------------------------------------------------------------------
 
+def _parse_interval_days(config: Dict) -> int:
+    """Parse and validate full_check_interval_days from config.
+
+    Returns a non-negative integer, defaulting to 28 on missing or invalid values.
+    """
+    try:
+        return max(0, int(config.get("full_check_interval_days", 28)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid full_check_interval_days in config — defaulting to 28 days.")
+        return 28
+
+
+def _needs_sync(
+    local_count: int,
+    remote_count: int,
+    in_updated_feed: bool,
+    last_synced: float,
+    full_check_interval_s: float,
+    now: float,
+) -> bool:
+    """Return True when a CBZ sync is required.
+
+    Sync is needed when:
+    - the comic has never been downloaded (local_count == 0)
+    - the remote page count has changed
+    - the comic appears in the updated feed AND has not been synced within the
+      configured interval (avoids re-downloading every poll cycle when the feed
+      entry persists but the content has not actually changed)
+    """
+    if local_count == 0:
+        return True
+    if remote_count != local_count:
+        return True
+    if in_updated_feed:
+        recently_synced = last_synced > 0 and (now - last_synced) < full_check_interval_s
+        return not recently_synced
+    return False
+
+
 def _process_comic(
     session: requests.Session,
     url: str,
     config: Dict,
     db_path: str,
+    full_check_interval_s: float,
     in_updated_feed: bool = False,
 ):
     """
@@ -171,11 +211,25 @@ def _process_comic(
         cbz_path = _cbz_path_for(output_dir, title, author)
 
     # Decide whether a sync is needed
-    counts_changed = remote_count != local_count
-    needs_sync = (local_count == 0) or counts_changed or in_updated_feed
+    now = time.time()
+    last_synced = (existing or {}).get("last_synced") or 0
+    needs_sync = _needs_sync(
+        local_count=local_count,
+        remote_count=remote_count,
+        in_updated_feed=in_updated_feed,
+        last_synced=last_synced,
+        full_check_interval_s=full_check_interval_s,
+        now=now,
+    )
 
     if not needs_sync:
-        logger.info(f"  '{title}' is up to date ({local_count} pages).")
+        if in_updated_feed:
+            logger.info(
+                f"  '{title}' in updated feed — page count unchanged, "
+                f"last synced {(now - last_synced) / 86400:.1f}d ago — skipping re-download."
+            )
+        else:
+            logger.info(f"  '{title}' is up to date ({local_count} pages).")
         db.update_comic_checked(
             db_path, url, local_count, json.dumps(tags),
             _make_rel_cbz(output_dir, cbz_path), title, meta["node_id"],
@@ -196,6 +250,7 @@ def _process_comic(
                 db_path, url, disk_count, json.dumps(tags),
                 _make_rel_cbz(output_dir, cbz_path), title, meta["node_id"],
                 cbz_hash=cbz_hash,
+                last_synced=time.time(),
             )
             return
         # File exists but is incomplete — fall through to sync
@@ -217,11 +272,18 @@ def _process_comic(
             logger.info(f"    [{idx}/{remote_count}] {img_url}")
             try:
                 img_bytes = mp.download_image(session, img_url)
-                ext = mp.get_image_extension(img_url)
-                tmp_file = os.path.join(tmpdir, f"{idx:03d}.{ext}")
+                # get_image_extension() already validates against an allowlist and
+                # never returns a dot-prefixed string; lstrip is a defensive no-op.
+                ext = mp.get_image_extension(img_url).lstrip(".")
+                tmp_file = os.path.join(tmpdir, f"{idx:04d}.{ext}")
                 with open(tmp_file, "wb") as f:
                     f.write(img_bytes)
-                remote_image_paths.append((f"img.{ext}", tmp_file))
+                # Build an arcname that preserves both the position (for correct
+                # sort order in any CBZ reader) and the original filename.
+                orig_stem = img_url.split("?")[0].rpartition("/")[-1].rpartition(".")[0]
+                safe_stem = cbz.sanitize_filename(orig_stem) if orig_stem else f"page{idx}"
+                arcname = f"{idx:04d}-{safe_stem}.{ext}"
+                remote_image_paths.append((arcname, tmp_file))
                 sleep(1)
             except Exception as exc:
                 logger.error(f"    Download failed for page {idx}: {exc}")
@@ -263,6 +325,7 @@ def _process_comic(
         db_path, url, final_count, json.dumps(tags),
         _make_rel_cbz(output_dir, cbz_path), title, meta["node_id"],
         cbz_hash=cbz_hash,
+        last_synced=time.time(),
     )
     logger.info(f"  Done: '{title}' — {final_count} live page(s), {archived} archived.")
 
@@ -304,7 +367,7 @@ def run_once(config: Dict, db_path: str):
     os.makedirs(output_dir, exist_ok=True)
 
     # Interval used for per-comic and per-artist re-check gating
-    interval_days = config.get("full_check_interval_days", 28)
+    interval_days = _parse_interval_days(config)
     full_check_interval_s = interval_days * 86400
     now = time.time()
 
@@ -392,7 +455,7 @@ def run_once(config: Dict, db_path: str):
         if not (never_downloaded or in_updated_feed or due_for_full_check):
             continue
 
-        _process_comic(session, comic_url, config, db_path, in_updated_feed=in_updated_feed)
+        _process_comic(session, comic_url, config, db_path, full_check_interval_s, in_updated_feed=in_updated_feed)
         sleep(1)
 
     # Per-comic last_checked timestamps are updated by _process_comic() via
