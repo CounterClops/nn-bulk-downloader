@@ -26,7 +26,12 @@ CONTENT_TYPES = {
 }
 
 COMIC_PATH_SEGMENTS = set(CONTENT_TYPES.keys())
-ARTIST_PATH_SEGMENTS = {"comic_author", "authors_comics"}
+ARTIST_PATH_SEGMENTS = {
+    "comic_author",
+    "authors_comics",
+    "authors_hentai_comics",
+}
+MP_COMIC_SEGMENT_RE = re.compile(r"^mp\d+$")
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +44,12 @@ def detect_url_type(url: str) -> str:
     if len(parts) < 4:
         raise ValueError(f"Cannot determine type for URL: {url}")
     segment = parts[3]
-    if segment in COMIC_PATH_SEGMENTS:
+
+    # User content artist pages are nested under /user_content/artists/<name>.
+    if segment == "user_content" and len(parts) >= 6 and parts[4] == "artists":
+        return "artist"
+
+    if segment in COMIC_PATH_SEGMENTS or MP_COMIC_SEGMENT_RE.match(segment):
         return "comic"
     if segment in ARTIST_PATH_SEGMENTS:
         return "artist"
@@ -111,9 +121,10 @@ def _extract_tags(soup: BeautifulSoup) -> List[str]:
 
 def _extract_author(soup: BeautifulSoup) -> str:
     """Return the first author name found by looking for artist page links."""
+    artist_tokens = tuple(f"/{segment}/" for segment in ARTIST_PATH_SEGMENTS)
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        if "/comic_author/" in href or "/authors_comics/" in href:
+        if "/user_content/artists/" in href or any(token in href for token in artist_tokens):
             name = a.get_text(strip=True)
             if name:
                 return name
@@ -146,6 +157,9 @@ def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
         raise ValueError(f"Cannot parse URL: {url}")
     section = parts[3]
     field_type = CONTENT_TYPES.get(section)
+    if field_type is None and MP_COMIC_SEGMENT_RE.match(section):
+        # User-content comic pages use /mp<nodeid> and expose pages via field_files.
+        field_type = "field_files"
     if field_type is None:
         raise ValueError(f"Unsupported content section '{section}' in: {url}")
 
@@ -236,7 +250,11 @@ def fetch_artist_comics(
                 continue
 
             parts = href.rstrip("/").split("/")
-            if len(parts) >= 5 and parts[3] in COMIC_PATH_SEGMENTS:
+            segment = parts[3] if len(parts) >= 4 else ""
+            is_classic_comic = len(parts) >= 5 and segment in COMIC_PATH_SEGMENTS
+            is_mp_comic = len(parts) >= 4 and bool(MP_COMIC_SEGMENT_RE.match(segment))
+
+            if is_classic_comic or is_mp_comic:
                 norm = _normalise(href)
                 if norm in censored_hrefs:
                     continue
