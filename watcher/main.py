@@ -263,6 +263,23 @@ def _process_comic(
         f"(stored: {local_count}{', in updated feed' if in_updated_feed else ''})"
     )
 
+    # If a previous run recorded a page failure, probe that page first using
+    # the freshly-fetched URL (which may have been fixed upstream).
+    failed_page = (existing or {}).get("failed_page")
+    if failed_page and 1 <= failed_page <= remote_count:
+        probe_url = image_urls[failed_page - 1]
+        logger.info(f"  Probing previously-failed page {failed_page}: {probe_url}")
+        try:
+            mp.download_image(session, probe_url)
+        except Exception as exc:
+            logger.error(
+                f"  Page {failed_page} still failing ({exc}) — skipping download until it is fixed."
+            )
+            db.set_comic_failed_page(db_path, url, failed_page)
+            return
+        logger.info(f"  Page {failed_page} now OK — proceeding with full download.")
+        db.set_comic_failed_page(db_path, url, None)
+
     # Download ALL remote pages to a temporary directory
     with tempfile.TemporaryDirectory(prefix="multporn_dl_") as tmpdir:
         remote_image_paths: list = []
@@ -287,6 +304,7 @@ def _process_comic(
                 sleep(1)
             except Exception as exc:
                 logger.error(f"    Download failed for page {idx}: {exc}")
+                db.set_comic_failed_page(db_path, url, idx)
                 failed = True
                 break
 
@@ -327,6 +345,8 @@ def _process_comic(
         cbz_hash=cbz_hash,
         last_synced=time.time(),
     )
+    # Clear the failure marker only after all persistence steps have succeeded.
+    db.set_comic_failed_page(db_path, url, None)
     logger.info(f"  Done: '{title}' — {final_count} live page(s), {archived} archived.")
 
 
