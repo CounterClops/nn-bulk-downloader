@@ -31,14 +31,16 @@ def init_db(db_path: str):
                 last_synced  REAL,
                 first_seen  REAL    NOT NULL,
                 is_blacklisted INTEGER DEFAULT 0,
-                skip_reason TEXT
+                skip_reason TEXT,
+                failed_page INTEGER DEFAULT NULL
             )
         """)
         # Migrations: add columns to databases created before they existed
         for col, definition in [
-            ("skip_reason", "TEXT"),
-            ("cbz_hash",    "TEXT"),
-            ("last_synced", "REAL"),
+            ("skip_reason",  "TEXT"),
+            ("cbz_hash",     "TEXT"),
+            ("last_synced",  "REAL"),
+            ("failed_page",  "INTEGER"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE tracked_comics ADD COLUMN {col} {definition}")
@@ -198,5 +200,19 @@ def set_setting(db_path: str, key: str, value: str):
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
             (key, value),
+        )
+    conn.close()
+
+
+def set_comic_failed_page(db_path: str, url: str, page_num: Optional[int]):
+    """Record (or clear) the 1-based page number that last failed to download.
+
+    Pass *page_num=None* to clear the stored failure after a successful retry.
+    """
+    conn = _connect(db_path)
+    with conn:
+        conn.execute(
+            "UPDATE tracked_comics SET failed_page = ? WHERE url = ?",
+            (page_num, url),
         )
     conn.close()

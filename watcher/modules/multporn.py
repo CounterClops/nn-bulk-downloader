@@ -1,4 +1,5 @@
 import re
+import time
 from time import sleep
 from typing import Dict, List, Optional, Set
 from urllib.parse import urljoin
@@ -6,6 +7,8 @@ from urllib.parse import urljoin
 import requests
 import xmltodict
 from bs4 import BeautifulSoup
+
+from modules import logger
 
 BASE_URL = "https://multporn.net"
 
@@ -315,10 +318,45 @@ def fetch_updated_feed(
     return updated
 
 
+MAX_DOWNLOAD_RETRIES = 3
+DOWNLOAD_RETRY_DELAY = 5   # seconds between retries
+DOWNLOAD_TIMEOUT = (10, 30)  # (connect timeout, read timeout) in seconds
+
+
 def download_image(session: requests.Session, url: str) -> bytes:
-    resp = session.get(url)
-    resp.raise_for_status()
-    return resp.content
+    """Download a single image, retrying on transient errors.
+
+    Retries up to MAX_DOWNLOAD_RETRIES times on network errors and HTTP 5xx
+    responses, waiting DOWNLOAD_RETRY_DELAY seconds between attempts.
+    HTTP 4xx responses are considered permanent failures and are raised
+    immediately without retrying.
+    """
+    last_exc: Exception = RuntimeError("No attempts made")
+    for attempt in range(1, MAX_DOWNLOAD_RETRIES + 1):
+        try:
+            resp = session.get(url, timeout=DOWNLOAD_TIMEOUT)
+            resp.raise_for_status()
+            return resp.content
+        except requests.HTTPError as exc:
+            last_exc = exc
+            status = exc.response.status_code if exc.response is not None else 0
+            if 400 <= status < 500:
+                raise  # permanent — propagate immediately
+            if attempt < MAX_DOWNLOAD_RETRIES:
+                logger.warning(
+                    f"    HTTP {status} downloading {url} "
+                    f"(attempt {attempt}/{MAX_DOWNLOAD_RETRIES}) — retrying in {DOWNLOAD_RETRY_DELAY}s"
+                )
+                sleep(DOWNLOAD_RETRY_DELAY)
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < MAX_DOWNLOAD_RETRIES:
+                logger.warning(
+                    f"    Network error downloading {url} "
+                    f"(attempt {attempt}/{MAX_DOWNLOAD_RETRIES}) — retrying in {DOWNLOAD_RETRY_DELAY}s: {exc}"
+                )
+                sleep(DOWNLOAD_RETRY_DELAY)
+    raise last_exc
 
 
 def get_image_extension(url: str) -> str:

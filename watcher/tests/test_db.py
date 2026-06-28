@@ -1,4 +1,4 @@
-"""Tests for DB-level persistence of the last_synced column."""
+"""Tests for DB-level persistence of the last_synced column and failed_page tracking."""
 
 import os
 import tempfile
@@ -83,5 +83,46 @@ class TestLastSynced:
             )
             row = db.get_comic(db_path, url)
             assert row["last_synced"] == pytest.approx(ts2, abs=1.0)
+        finally:
+            os.unlink(db_path)
+
+
+class TestFailedPage:
+    def _make_db(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db.init_db(tmp.name)
+        return tmp.name
+
+    def test_failed_page_initially_none(self):
+        db_path = self._make_db()
+        try:
+            url = "https://example.com/comics/fp1"
+            db.upsert_comic(db_path, url)
+            row = db.get_comic(db_path, url)
+            assert row["failed_page"] is None
+        finally:
+            os.unlink(db_path)
+
+    def test_set_failed_page(self):
+        db_path = self._make_db()
+        try:
+            url = "https://example.com/comics/fp2"
+            db.upsert_comic(db_path, url)
+            db.set_comic_failed_page(db_path, url, 42)
+            row = db.get_comic(db_path, url)
+            assert row["failed_page"] == 42
+        finally:
+            os.unlink(db_path)
+
+    def test_clear_failed_page(self):
+        db_path = self._make_db()
+        try:
+            url = "https://example.com/comics/fp3"
+            db.upsert_comic(db_path, url)
+            db.set_comic_failed_page(db_path, url, 7)
+            db.set_comic_failed_page(db_path, url, None)
+            row = db.get_comic(db_path, url)
+            assert row["failed_page"] is None
         finally:
             os.unlink(db_path)
