@@ -1,8 +1,8 @@
 import re
 import time
 from time import sleep
-from typing import Dict, List, Optional, Set
-from urllib.parse import urljoin
+from typing import Dict, List, NamedTuple, Optional, Set
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
 import xmltodict
@@ -11,9 +11,6 @@ from bs4 import BeautifulSoup
 from modules import logger
 
 BASE_URL = "https://multporn.net"
-
-# Tags that indicate censored content (matched case-insensitively)
-CENSORED_TAGS: frozenset = frozenset({"mini girl", "mini male"})
 
 # Maps URL path segment → Juicebox field type
 CONTENT_TYPES = {
@@ -37,13 +34,26 @@ ARTIST_PATH_SEGMENTS = {
 MP_COMIC_SEGMENT_RE = re.compile(r"^mp\d+$")
 
 
+class ArtistListing(NamedTuple):
+    """What an artist page currently shows.
+
+    *censored_urls* is a subset of *comic_urls*: the site marks censored entries
+    by rendering their preview thumbnail through the ``blur_comics`` image
+    style. That marker exists only on listing pages — a comic's own page carries
+    no trace of it — so an artist listing is the only place the verdict can be
+    observed, and it is reported rather than acted on here.
+    """
+    comic_urls: List[str]
+    censored_urls: Set[str]
+
+
 # ---------------------------------------------------------------------------
 # URL utilities
 # ---------------------------------------------------------------------------
 
 def detect_url_type(url: str) -> str:
     """Return 'comic' or 'artist', or raise ValueError if unrecognised."""
-    parts = url.rstrip("/").split("/")
+    parts = normalise_url(url).split("/")
     if len(parts) < 4:
         raise ValueError(f"Cannot determine type for URL: {url}")
     segment = parts[3]
@@ -59,8 +69,17 @@ def detect_url_type(url: str) -> str:
     raise ValueError(f"Unrecognised URL segment '{segment}' in: {url}")
 
 
-def _normalise(url: str) -> str:
-    return url.rstrip("/")
+def normalise_url(url: str) -> str:
+    """Return a site URL in canonical form: no query string, no fragment, no
+    trailing slash.
+
+    Listings link to the same comic under assorted view parameters — ``?r=1``,
+    ``?rule34=2`` — which select a presentation rather than distinct content.
+    Collapsing them is what keeps one database row per comic. Works on relative
+    hrefs as well as absolute URLs.
+    """
+    split = urlsplit(url)
+    return urlunsplit((split.scheme, split.netloc, split.path.rstrip("/"), "", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +174,7 @@ def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
     Return a dict with keys:
       node_id, title, author, tags, language, image_urls, page_count
     """
-    parts = url.rstrip("/").split("/")
+    parts = normalise_url(url).split("/")
     if len(parts) < 4:
         raise ValueError(f"Cannot parse URL: {url}")
     section = parts[3]
@@ -205,22 +224,19 @@ def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
     }
 
 
-def fetch_artist_comics(
-    session: requests.Session,
-    url: str,
-    exclude_censored: bool = False,
-) -> List[str]:
-    """Return all comic URLs found on an artist page, following Drupal pagination.
+def fetch_artist_comics(session: requests.Session, url: str) -> ArtistListing:
+    """Return every comic an artist page lists, following Drupal pagination.
 
     Drupal uses non-sequential page tokens (e.g. ``?page=0%2C1``) rather than
     simple integers, so we follow the ``pager-next`` link href directly instead
     of constructing page numbers manually.
 
-    When *exclude_censored* is True, comics whose listing preview thumbnail uses
-    the ``blur_comics`` image style (the site's censored-content marker) are
-    omitted from the results.
+    Censored entries are reported in the result's *censored_urls* rather than
+    dropped, so the caller can record the verdict and re-derive it on the next
+    refresh instead of silently losing track of the comic.
     """
     comic_urls: List[str] = []
+    censored_urls: Set[str] = set()
     seen: set = set()
     next_url: Optional[str] = url
 
@@ -230,18 +246,18 @@ def fetch_artist_comics(
 
         soup = BeautifulSoup(resp.text, "lxml")
 
-        # Build a set of URLs whose preview thumbnail is blurred (censored).
-        # The site uses styles/blur_comics/ in the <img src> for these entries.
-        censored_hrefs: set = set()
-        if exclude_censored:
-            for img in soup.find_all("img", src=True):
-                if "blur_comics" in img["src"]:
-                    parent_a = img.find_parent("a", href=True)
-                    if parent_a:
-                        href = parent_a["href"]
-                        if href.startswith("/"):
-                            href = BASE_URL + href
-                        censored_hrefs.add(_normalise(href))
+        # Collect the URLs the site has marked censored on this page: their
+        # preview thumbnail is rendered through the blur_comics image style.
+        for img in soup.find_all("img", src=True):
+            if "blur_comics" not in img["src"]:
+                continue
+            thumbnail_link = img.find_parent("a", href=True)
+            if not thumbnail_link:
+                continue
+            href = thumbnail_link["href"]
+            if href.startswith("/"):
+                href = BASE_URL + href
+            censored_urls.add(normalise_url(href))
 
         found_on_page = 0
 
@@ -252,15 +268,13 @@ def fetch_artist_comics(
             if not href.startswith(BASE_URL):
                 continue
 
-            parts = href.rstrip("/").split("/")
+            parts = normalise_url(href).split("/")
             segment = parts[3] if len(parts) >= 4 else ""
             is_classic_comic = len(parts) >= 5 and segment in COMIC_PATH_SEGMENTS
             is_mp_comic = len(parts) >= 4 and bool(MP_COMIC_SEGMENT_RE.match(segment))
 
             if is_classic_comic or is_mp_comic:
-                norm = _normalise(href)
-                if norm in censored_hrefs:
-                    continue
+                norm = normalise_url(href)
                 if norm not in seen:
                     comic_urls.append(norm)
                     seen.add(norm)
@@ -280,7 +294,7 @@ def fetch_artist_comics(
         next_url = urljoin(resp.url, next_href)
         sleep(2)
 
-    return comic_urls
+    return ArtistListing(comic_urls=comic_urls, censored_urls=censored_urls)
 
 
 def fetch_updated_feed(
@@ -309,9 +323,9 @@ def fetch_updated_feed(
             if not href.startswith(BASE_URL):
                 continue
 
-            parts = href.rstrip("/").split("/")
+            parts = normalise_url(href).split("/")
             if len(parts) >= 5 and parts[3] in COMIC_PATH_SEGMENTS:
-                updated.add(_normalise(href))
+                updated.add(normalise_url(href))
 
         sleep(2)
 

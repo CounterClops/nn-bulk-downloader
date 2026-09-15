@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 from time import sleep
-from typing import Dict, Set
+from typing import Dict, Optional, Set
 
 import requests
 
@@ -66,12 +66,6 @@ def _is_blacklisted(tags: list, blacklist: list) -> bool:
     return any(b.lower() in tags_lower for b in blacklist)
 
 
-def _is_censored(tags: list) -> bool:
-    """Return True if *tags* indicate this is a censored/minor-content comic."""
-    tags_lower = {t.lower() for t in tags}
-    return bool(tags_lower & mp.CENSORED_TAGS)
-
-
 def _is_language_allowed(language: str, allowed_languages: list) -> bool:
     """Return True if *language* is in the allowed list, or the list is empty (allow all).
 
@@ -86,6 +80,23 @@ def _is_language_allowed(language: str, allowed_languages: list) -> bool:
         return True
     page_primary = language.split("-")[0].lower()
     return page_primary in {lang.split("-")[0].lower() for lang in allowed_languages}
+
+
+def _mark_skipped(db_path: str, url: str, title: str, tags: list, reason: str):
+    """Record a filter decision against a comic.
+
+    last_checked is stamped so the comic re-enters the normal full-check
+    rotation: skip decisions are re-derived from freshly-fetched metadata on
+    each interval rather than being frozen at the moment of discovery.
+    """
+    db.upsert_comic(
+        db_path, url,
+        title=title,
+        is_blacklisted=1,
+        skip_reason=reason,
+        tags_json=json.dumps(tags),
+        last_checked=time.time(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +142,35 @@ def _needs_sync(
     return False
 
 
+def _needs_check(
+    is_skipped: bool,
+    skip_reason: Optional[str],
+    never_downloaded: bool,
+    in_updated_feed: bool,
+    due_for_full_check: bool,
+) -> bool:
+    """Return True when a comic is worth spending HTTP requests on this cycle.
+
+    A tracked comic is checked when it has never been downloaded, when the
+    updated feed reports a change, or when its full-check interval has elapsed.
+
+    A skipped comic is checked on the same terms minus *never_downloaded*:
+    every skipped comic has a page count of zero, so honouring it there would
+    re-fetch the whole skip list on every poll. The remaining triggers still
+    bring it round on each interval, so a filter decision tracks the site's
+    current metadata instead of being frozen at the moment of discovery.
+
+    A censored comic is the exception: that verdict comes from the artist
+    listing's blur marker, which its own page does not carry, so fetching it
+    would cost two requests and learn nothing. Artist discovery reconciles it.
+    """
+    if is_skipped:
+        if skip_reason == db.CENSORED_SKIP_REASON:
+            return False
+        return due_for_full_check or in_updated_feed
+    return never_downloaded or due_for_full_check or in_updated_feed
+
+
 def _process_comic(
     session: requests.Session,
     url: str,
@@ -138,6 +178,7 @@ def _process_comic(
     db_path: str,
     full_check_interval_s: float,
     in_updated_feed: bool = False,
+    is_direct_watch: bool = False,
 ):
     """
     Check a single comic and update its CBZ if anything has changed.
@@ -155,7 +196,6 @@ def _process_comic(
     """
     blacklist = config.get("blacklisted_tags", [])
     allowed_languages = config.get("allowed_languages", ["en"])
-    exclude_censored = config.get("exclude_censored", False)
     output_dir = config["output_dir"]
 
     existing = db.get_comic(db_path, url)
@@ -179,29 +219,29 @@ def _process_comic(
         logger.warning(
             f"  '{title}' is language '{language}' — not in allowed_languages {allowed_languages}. Skipping."
         )
-        db.upsert_comic(
-            db_path, url,
-            title=title, is_blacklisted=1, skip_reason="language", tags_json=json.dumps(tags),
-        )
+        _mark_skipped(db_path, url, title, tags, "language")
         return
 
-    # Tag blacklist check
-    if _is_blacklisted(tags, blacklist):
+    # Tag blacklist check — scoped to bulk-discovered comics only; comics the
+    # user explicitly watches directly (a single-comic watchlist/config entry)
+    # are exempt, regardless of their tags.
+    if not is_direct_watch and _is_blacklisted(tags, blacklist):
         logger.warning(f"  '{title}' matches blacklisted tag — skipping and marking.")
-        db.upsert_comic(
-            db_path, url,
-            title=title, is_blacklisted=1, skip_reason="tag", tags_json=json.dumps(tags),
-        )
+        _mark_skipped(db_path, url, title, tags, "tag")
         return
 
-    # Censored content check
-    if exclude_censored and _is_censored(tags):
-        logger.warning(f"  '{title}' is censored content (minor characters) — skipping and marking.")
-        db.upsert_comic(
-            db_path, url,
-            title=title, is_blacklisted=1, skip_reason="censored", tags_json=json.dumps(tags),
+    # Every filter passed. If an earlier run skipped this comic, that decision
+    # no longer holds — the site's metadata or the config has changed since —
+    # so lift it and let the download proceed.
+    # A censored skip is not ours to lift: nothing on this page carries the
+    # site's blur marker, so only artist discovery can revisit that verdict.
+    previous_skip_reason = (existing or {}).get("skip_reason")
+    if (existing or {}).get("is_blacklisted") and previous_skip_reason != db.CENSORED_SKIP_REASON:
+        logger.info(
+            f"  '{title}' no longer matches the '{previous_skip_reason}' filter "
+            f"— resuming downloads."
         )
-        return
+        db.clear_comic_skip(db_path, url)
 
     local_count = (existing or {}).get("page_count", 0)
     raw_path = (existing or {}).get("cbz_path") or ""
@@ -391,12 +431,9 @@ def run_once(config: Dict, db_path: str):
     full_check_interval_s = interval_days * 86400
     now = time.time()
 
+    # Censored exclusion is applied at discovery time only: artist listings hide
+    # comics whose preview thumbnail carries the site's blur marker.
     exclude_censored = config.get("exclude_censored", False)
-
-    # If censored exclusion is currently OFF, lift any previously-applied censored
-    # skip so those comics are re-evaluated against the current config this run.
-    if not exclude_censored:
-        db.clear_blacklisted_by_reason(db_path, "censored")
 
     # 1. Fetch the updated-comics feed to know which comics need attention
     updated_set: Set[str] = set()
@@ -420,8 +457,9 @@ def run_once(config: Dict, db_path: str):
     all_watched.extend(file_items)
 
     watched_comics: Set[str] = set()
+    direct_comic_urls: Set[str] = set()
     for item in all_watched:
-        url = item["url"].rstrip("/")
+        url = mp.normalise_url(item["url"])
         item_type = item.get("type", "")
 
         if item_type == "artist":
@@ -439,43 +477,73 @@ def run_once(config: Dict, db_path: str):
                 continue
             logger.info(f"Fetching artist catalogue: {url}")
             try:
-                artist_comics = mp.fetch_artist_comics(session, url, exclude_censored=exclude_censored)
-                logger.info(f"  Found {len(artist_comics)} comic(s).")
-                for comic_url in artist_comics:
+                listing = mp.fetch_artist_comics(session, url)
+                logger.info(
+                    f"  Found {len(listing.comic_urls)} comic(s), "
+                    f"{len(listing.censored_urls)} marked censored by the site."
+                )
+                for comic_url in listing.comic_urls:
                     watched_comics.add(comic_url)
                     db.upsert_comic(db_path, comic_url)
+                # The listing is the only place the blur marker appears, so the
+                # censored skip is re-derived here on every artist refresh.
+                # With the setting off, an empty set releases anything it held.
+                db.sync_censored_skips(
+                    db_path,
+                    listing.comic_urls,
+                    listing.censored_urls if exclude_censored else set(),
+                )
                 db.upsert_artist_checked(db_path, url)
             except Exception as exc:
                 logger.error(f"  Failed to fetch artist page: {exc}")
 
         elif item_type == "comic":
             watched_comics.add(url)
+            direct_comic_urls.add(url)
             db.upsert_comic(db_path, url)
+
+    # A comic previously discovered (and tag-blacklisted) via a bulk artist
+    # listing may now be directly watched — the user's explicit intent
+    # overrides the earlier bulk-scoped blacklist decision, so unblock it
+    # for re-evaluation this run.
+    if direct_comic_urls:
+        db.clear_tag_blacklist_for_urls(db_path, list(direct_comic_urls))
 
     # 3. Process every tracked comic that needs attention
     all_comics = db.get_all_comics(db_path)
     for comic in all_comics:
         comic_url = comic["url"]
 
-        if comic["is_blacklisted"]:
-            continue
-
+        is_skipped = bool(comic["is_blacklisted"])
         never_downloaded = comic["page_count"] == 0
         in_updated_feed  = comic_url in updated_set
+        is_direct_watch  = comic_url in direct_comic_urls
         last_checked = comic.get("last_checked") or 0
         due_for_full_check = (now - last_checked) >= full_check_interval_s
-        if due_for_full_check and not never_downloaded and not in_updated_feed:
+
+        if not _needs_check(
+            is_skipped=is_skipped,
+            skip_reason=comic["skip_reason"],
+            never_downloaded=never_downloaded,
+            in_updated_feed=in_updated_feed,
+            due_for_full_check=due_for_full_check,
+        ):
+            continue
+
+        if is_skipped:
+            elapsed = (now - last_checked) / 86400
+            logger.info(
+                f"Re-checking skipped comic ({comic['skip_reason']}, "
+                f"last checked {elapsed:.1f}d ago): {comic_url}"
+            )
+        elif due_for_full_check and not never_downloaded and not in_updated_feed:
             elapsed = (now - last_checked) / 86400
             logger.info(f"Full-check due for: {comic_url} (last checked {elapsed:.1f}d ago)")
 
-        # Only hit the site if there's a reason to:
-        #   - never downloaded yet (first run for this comic), OR
-        #   - the updated feed says it changed, OR
-        #   - per-comic full-check interval has elapsed
-        if not (never_downloaded or in_updated_feed or due_for_full_check):
-            continue
-
-        _process_comic(session, comic_url, config, db_path, full_check_interval_s, in_updated_feed=in_updated_feed)
+        _process_comic(
+            session, comic_url, config, db_path, full_check_interval_s,
+            in_updated_feed=in_updated_feed, is_direct_watch=is_direct_watch,
+        )
         sleep(1)
 
     # Per-comic last_checked timestamps are updated by _process_comic() via

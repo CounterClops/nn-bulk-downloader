@@ -14,7 +14,7 @@ import os
 from typing import Dict, List
 
 from modules import logger
-from modules.multporn import detect_url_type
+from modules.multporn import detect_url_type, normalise_url
 
 
 def load_watchlist(path: str) -> List[Dict]:
@@ -45,7 +45,7 @@ def load_watchlist(path: str) -> List[Dict]:
                 logger.warn(f"watchlist line {lineno}: not a URL, skipping: {url!r}")
                 continue
 
-            url = url.rstrip("/")
+            url = normalise_url(url)
             if url in seen:
                 continue
             seen.add(url)

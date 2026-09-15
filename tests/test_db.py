@@ -126,3 +126,86 @@ class TestFailedPage:
             assert row["failed_page"] is None
         finally:
             os.unlink(db_path)
+
+
+class TestClearTagBlacklistForUrls:
+    def _make_db(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db.init_db(tmp.name)
+        return tmp.name
+
+    def test_clears_matching_tag_entries_in_list(self):
+        db_path = self._make_db()
+        try:
+            url = "https://example.com/comics/tag1"
+            db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason="tag")
+
+            db.clear_tag_blacklist_for_urls(db_path, [url])
+
+            row = db.get_comic(db_path, url)
+            assert row["is_blacklisted"] == 0
+            assert row["skip_reason"] is None
+        finally:
+            os.unlink(db_path)
+
+    def test_does_not_clear_tag_entries_not_in_list(self):
+        db_path = self._make_db()
+        try:
+            url = "https://example.com/comics/tag2"
+            db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason="tag")
+
+            db.clear_tag_blacklist_for_urls(db_path, ["https://example.com/comics/other"])
+
+            row = db.get_comic(db_path, url)
+            assert row["is_blacklisted"] == 1
+            assert row["skip_reason"] == "tag"
+        finally:
+            os.unlink(db_path)
+
+    def test_does_not_clear_other_reasons_even_if_url_in_list(self):
+        db_path = self._make_db()
+        try:
+            censored_url = "https://example.com/comics/censored1"
+            language_url = "https://example.com/comics/language1"
+            db.upsert_comic(db_path, censored_url, is_blacklisted=1, skip_reason="censored")
+            db.upsert_comic(db_path, language_url, is_blacklisted=1, skip_reason="language")
+
+            db.clear_tag_blacklist_for_urls(db_path, [censored_url, language_url])
+
+            row_censored = db.get_comic(db_path, censored_url)
+            assert row_censored["is_blacklisted"] == 1
+            assert row_censored["skip_reason"] == "censored"
+
+            row_language = db.get_comic(db_path, language_url)
+            assert row_language["is_blacklisted"] == 1
+            assert row_language["skip_reason"] == "language"
+        finally:
+            os.unlink(db_path)
+
+    def test_empty_urls_list_is_no_op(self):
+        db_path = self._make_db()
+        try:
+            url = "https://example.com/comics/tag3"
+            db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason="tag")
+
+            db.clear_tag_blacklist_for_urls(db_path, [])
+
+            row = db.get_comic(db_path, url)
+            assert row["is_blacklisted"] == 1
+            assert row["skip_reason"] == "tag"
+        finally:
+            os.unlink(db_path)
+
+    def test_no_op_when_no_matching_entries(self):
+        db_path = self._make_db()
+        try:
+            url = "https://example.com/comics/tag4"
+            db.upsert_comic(db_path, url)
+
+            db.clear_tag_blacklist_for_urls(db_path, [url])
+
+            row = db.get_comic(db_path, url)
+            assert row["is_blacklisted"] == 0
+        finally:
+            os.unlink(db_path)

@@ -1,114 +1,219 @@
-"""Tests for censored-content detection and config re-evaluation logic."""
+"""Tests for censored-content handling.
+
+Censoring is a discovery-time concern only: artist listings omit comics whose
+preview thumbnail carries the site's ``blur_comics`` marker. There is no
+tag-based censoring — the retired hardcoded tag list used to skip comics the
+site itself had not marked, and its leftover rows are cleared on first init.
+"""
 
 import os
 import sqlite3
 import tempfile
+from unittest.mock import patch
 
-from main import _is_censored
+import main
+from main import _process_comic
 from modules import db
-from modules.multporn import CENSORED_TAGS
-from bs4 import BeautifulSoup
+
+MINI_MALE_META = {
+    "title": "Tagged Comic",
+    "tags": ["Oral", "Mini Male", "Big Tits"],
+    "author": "Some Author",
+    "language": "en",
+    "image_urls": [],
+    "page_count": 1,
+    "node_id": "1",
+}
+
+CONFIG = {
+    "blacklisted_tags": [],
+    "allowed_languages": ["en"],
+    "exclude_censored": True,
+    "output_dir": "/tmp",
+}
+
+
+def _make_db():
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    db.init_db(tmp.name)
+    return tmp.name
+
+
+def _rewind_cleanup_marker(db_path: str):
+    """Drop the cleanup's completion marker to simulate a database created
+    before the migration existed, so the next init_db() applies it."""
+    conn = sqlite3.connect(db_path)
+    with conn:
+        conn.execute(
+            "DELETE FROM settings WHERE key = ?", (db.LEGACY_CENSORED_CLEANUP_KEY,)
+        )
+    conn.close()
 
 
 # ---------------------------------------------------------------------------
-# _is_censored
+# No tag-based censoring
 # ---------------------------------------------------------------------------
 
-class TestIsCensored:
-    def test_mini_girl_tag(self):
-        assert _is_censored(["Anal", "Mini Girl", "Oral"]) is True
-
-    def test_mini_male_tag(self):
-        assert _is_censored(["Rape", "Mini Male"]) is True
-
-    def test_both_tags(self):
-        assert _is_censored(["Mini Girl", "Mini Male"]) is True
-
-    def test_no_censored_tags(self):
-        assert _is_censored(["Anal", "Oral", "Lesbians"]) is False
-
-    def test_empty_tags(self):
-        assert _is_censored([]) is False
-
-    def test_case_insensitive_lower(self):
-        assert _is_censored(["mini girl"]) is True
-
-    def test_case_insensitive_upper(self):
-        assert _is_censored(["MINI GIRL", "MINI MALE"]) is True
-
-    def test_partial_match_not_triggered(self):
-        # "mini" alone should not match
-        assert _is_censored(["mini"]) is False
-        assert _is_censored(["girl"]) is False
-
-
-# ---------------------------------------------------------------------------
-# CENSORED_TAGS constant
-# ---------------------------------------------------------------------------
-
-class TestCensoredTagsConstant:
-    def test_contains_expected_tags(self):
-        assert "mini girl" in CENSORED_TAGS
-        assert "mini male" in CENSORED_TAGS
-
-    def test_is_frozenset(self):
-        assert isinstance(CENSORED_TAGS, frozenset)
-
-
-# ---------------------------------------------------------------------------
-# db.clear_blacklisted_by_reason
-# ---------------------------------------------------------------------------
-
-class TestClearBlacklistedByReason:
-    def _make_db(self):
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        db.init_db(tmp.name)
-        return tmp.name
-
-    def test_clears_censored_entries(self):
-        db_path = self._make_db()
+class TestNoTagBasedCensoring:
+    def test_mini_male_tag_is_not_skipped(self):
+        """A tag the site has not blurred must not be treated as censored."""
+        db_path = _make_db()
         try:
-            db.upsert_comic(db_path, "https://example.com/comics/a",
-                            is_blacklisted=1, skip_reason="censored")
-            db.upsert_comic(db_path, "https://example.com/comics/b",
-                            is_blacklisted=1, skip_reason="censored")
+            url = "https://example.com/comics/mini_male"
+            db.upsert_comic(db_path, url)
+            db.update_comic_checked(db_path, url, 1, "[]", "x.cbz", "Tagged Comic", "1")
 
-            db.clear_blacklisted_by_reason(db_path, "censored")
+            with patch("main.mp.fetch_comic_metadata", return_value=MINI_MALE_META):
+                _process_comic(None, url, CONFIG, db_path, 28 * 86400)
 
-            for url in ["https://example.com/comics/a", "https://example.com/comics/b"]:
-                row = db.get_comic(db_path, url)
-                assert row["is_blacklisted"] == 0
-                assert row["skip_reason"] is None
-        finally:
-            os.unlink(db_path)
-
-    def test_does_not_clear_other_reasons(self):
-        db_path = self._make_db()
-        try:
-            db.upsert_comic(db_path, "https://example.com/comics/c",
-                            is_blacklisted=1, skip_reason="tag")
-            db.upsert_comic(db_path, "https://example.com/comics/d",
-                            is_blacklisted=1, skip_reason="language")
-
-            db.clear_blacklisted_by_reason(db_path, "censored")
-
-            row_c = db.get_comic(db_path, "https://example.com/comics/c")
-            assert row_c["is_blacklisted"] == 1
-            assert row_c["skip_reason"] == "tag"
-
-            row_d = db.get_comic(db_path, "https://example.com/comics/d")
-            assert row_d["is_blacklisted"] == 1
-            assert row_d["skip_reason"] == "language"
-        finally:
-            os.unlink(db_path)
-
-    def test_no_op_when_no_matching_entries(self):
-        db_path = self._make_db()
-        try:
-            db.upsert_comic(db_path, "https://example.com/comics/e")
-            db.clear_blacklisted_by_reason(db_path, "censored")
-            row = db.get_comic(db_path, "https://example.com/comics/e")
+            row = db.get_comic(db_path, url)
             assert row["is_blacklisted"] == 0
+            assert row["skip_reason"] is None
+        finally:
+            os.unlink(db_path)
+
+    def test_no_censored_helper_remains(self):
+        assert not hasattr(main, "_is_censored")
+
+
+# ---------------------------------------------------------------------------
+# One-time cleanup of the retired filter's rows
+# ---------------------------------------------------------------------------
+
+class TestLegacyCensoredCleanup:
+    def test_clears_censored_rows_on_init(self):
+        db_path = _make_db()
+        try:
+            url = "https://example.com/comics/a"
+            db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason="censored")
+            _rewind_cleanup_marker(db_path)
+
+            db.init_db(db_path)
+
+            row = db.get_comic(db_path, url)
+            assert row["is_blacklisted"] == 0
+            assert row["skip_reason"] is None
+        finally:
+            os.unlink(db_path)
+
+    def test_leaves_other_skip_reasons_alone(self):
+        db_path = _make_db()
+        try:
+            db.upsert_comic(db_path, "https://example.com/comics/t",
+                            is_blacklisted=1, skip_reason="tag")
+            db.upsert_comic(db_path, "https://example.com/comics/l",
+                            is_blacklisted=1, skip_reason="language")
+            _rewind_cleanup_marker(db_path)
+
+            db.init_db(db_path)
+
+            tag_row = db.get_comic(db_path, "https://example.com/comics/t")
+            assert tag_row["is_blacklisted"] == 1
+            assert tag_row["skip_reason"] == "tag"
+
+            lang_row = db.get_comic(db_path, "https://example.com/comics/l")
+            assert lang_row["is_blacklisted"] == 1
+            assert lang_row["skip_reason"] == "language"
+        finally:
+            os.unlink(db_path)
+
+    def test_runs_only_once(self):
+        """A censored skip written after the cleanup must survive later inits."""
+        db_path = _make_db()
+        try:
+            db.init_db(db_path)  # cleanup runs and is recorded here
+
+            url = "https://example.com/comics/later"
+            db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason="censored")
+
+            db.init_db(db_path)
+
+            row = db.get_comic(db_path, url)
+            assert row["is_blacklisted"] == 1
+            assert row["skip_reason"] == "censored"
+        finally:
+            os.unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# Reconciling the blur verdict against an artist listing
+# ---------------------------------------------------------------------------
+
+BLURRED = "https://example.com/comics/blurred"
+CLEAN = "https://example.com/comics/clean"
+
+
+class TestSyncCensoredSkips:
+    def test_marks_blurred_comics(self):
+        db_path = _make_db()
+        try:
+            for url in (BLURRED, CLEAN):
+                db.upsert_comic(db_path, url)
+
+            db.sync_censored_skips(db_path, [BLURRED, CLEAN], {BLURRED})
+
+            blurred_row = db.get_comic(db_path, BLURRED)
+            assert blurred_row["is_blacklisted"] == 1
+            assert blurred_row["skip_reason"] == "censored"
+
+            clean_row = db.get_comic(db_path, CLEAN)
+            assert clean_row["is_blacklisted"] == 0
+        finally:
+            os.unlink(db_path)
+
+    def test_releases_comics_the_site_no_longer_blurs(self):
+        db_path = _make_db()
+        try:
+            db.upsert_comic(db_path, BLURRED)
+            db.sync_censored_skips(db_path, [BLURRED], {BLURRED})
+
+            # Next refresh: the site has lifted the blur.
+            db.sync_censored_skips(db_path, [BLURRED], set())
+
+            row = db.get_comic(db_path, BLURRED)
+            assert row["is_blacklisted"] == 0
+            assert row["skip_reason"] is None
+        finally:
+            os.unlink(db_path)
+
+    def test_releasing_leaves_other_skip_reasons_intact(self):
+        """A tag skip must survive; only the censored reason is reconciled."""
+        db_path = _make_db()
+        try:
+            db.upsert_comic(db_path, CLEAN, is_blacklisted=1, skip_reason="tag")
+
+            db.sync_censored_skips(db_path, [CLEAN], set())
+
+            row = db.get_comic(db_path, CLEAN)
+            assert row["is_blacklisted"] == 1
+            assert row["skip_reason"] == "tag"
+        finally:
+            os.unlink(db_path)
+
+    def test_censored_takes_precedence_over_a_tag_skip(self):
+        db_path = _make_db()
+        try:
+            db.upsert_comic(db_path, BLURRED, is_blacklisted=1, skip_reason="tag")
+
+            db.sync_censored_skips(db_path, [BLURRED], {BLURRED})
+
+            row = db.get_comic(db_path, BLURRED)
+            assert row["skip_reason"] == "censored"
+        finally:
+            os.unlink(db_path)
+
+    def test_comics_outside_the_listing_are_untouched(self):
+        db_path = _make_db()
+        try:
+            other = "https://example.com/comics/other_artist"
+            db.upsert_comic(db_path, other, is_blacklisted=1, skip_reason="censored")
+            db.upsert_comic(db_path, CLEAN)
+
+            db.sync_censored_skips(db_path, [CLEAN], set())
+
+            row = db.get_comic(db_path, other)
+            assert row["is_blacklisted"] == 1
+            assert row["skip_reason"] == "censored"
         finally:
             os.unlink(db_path)
