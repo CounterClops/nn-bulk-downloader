@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import time
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, NamedTuple, Optional, Set
 
 from modules.multporn import normalise_url
 
@@ -43,6 +43,7 @@ def init_db(db_path: str):
             ("cbz_hash",     "TEXT"),
             ("last_synced",  "REAL"),
             ("failed_page",  "INTEGER"),
+            ("unlinked_since", "REAL"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE tracked_comics ADD COLUMN {col} {definition}")
@@ -61,9 +62,23 @@ def init_db(db_path: str):
                 last_checked REAL
             )
         """)
+        # Which watchlist entries provide each comic: an artist page for every
+        # comic its listing contains, or a direct comic entry for itself. A
+        # comic stays monitored while any one of its sources is still watched.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS comic_sources (
+                comic_url  TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                PRIMARY KEY (comic_url, source_url)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comic_sources_source ON comic_sources (source_url)"
+        )
         _clear_legacy_censored_skips(conn)
         _normalise_stored_urls(conn)
         _queue_comic_info_recheck(conn)
+        _queue_source_link_backfill(conn)
     conn.close()
 
 
@@ -204,6 +219,151 @@ def _queue_comic_info_recheck(conn: sqlite3.Connection):
     conn.execute(
         "INSERT INTO settings (key, value) VALUES (?, ?)",
         (COMIC_INFO_RECHECK_KEY, str(time.time())),
+    )
+
+
+SOURCE_LINK_BACKFILL_KEY = "comic_source_links_backfill_queued"
+
+
+def _queue_source_link_backfill(conn: sqlite3.Connection):
+    """Refetch every artist page once so existing comics gain their source links.
+
+    Links are recorded as sources are read, and comics tracked before links
+    existed have none. An artist page is only re-read once its full-check
+    interval lapses, so without this those comics would sit unmonitored — and
+    eventually be cleaned up — until then. Forgetting every artist's last check
+    makes each one due on the next run, which links everything it still lists.
+    """
+    already_queued = conn.execute(
+        "SELECT 1 FROM settings WHERE key = ?", (SOURCE_LINK_BACKFILL_KEY,)
+    ).fetchone()
+    if already_queued:
+        return
+
+    conn.execute("DELETE FROM tracked_artists")
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?)",
+        (SOURCE_LINK_BACKFILL_KEY, str(time.time())),
+    )
+
+
+def _load_active_sources(conn: sqlite3.Connection, source_urls: Set[str]):
+    """Stage the watched source URLs in a temp table for set-based queries.
+
+    Cleanup needs NOT IN against the whole watchlist, which cannot be split
+    across the chunked IN clauses used elsewhere.
+    """
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS active_sources (url TEXT PRIMARY KEY)")
+    conn.execute("DELETE FROM active_sources")
+    conn.executemany(
+        "INSERT OR IGNORE INTO active_sources (url) VALUES (?)",
+        [(url,) for url in source_urls],
+    )
+
+
+def link_comics_to_source(db_path: str, source_url: str, comic_urls: List[str]):
+    """Record that *source_url* provides each of *comic_urls*.
+
+    Links are only ever added here. A listing that comes back shorter than
+    before — a comic pulled from the site, or a page the site served
+    incompletely — does not unlink anything; a link ends only when its source
+    leaves the watchlist.
+    """
+    if not comic_urls:
+        return
+    conn = _connect(db_path)
+    with conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO comic_sources (comic_url, source_url) VALUES (?, ?)",
+            [(comic_url, source_url) for comic_url in comic_urls],
+        )
+    conn.close()
+
+
+def get_comic_source_urls(db_path: str, comic_url: str) -> Set[str]:
+    """Return every source recorded as providing *comic_url*."""
+    conn = _connect(db_path)
+    rows = conn.execute(
+        "SELECT source_url FROM comic_sources WHERE comic_url = ?", (comic_url,)
+    ).fetchall()
+    conn.close()
+    return {row["source_url"] for row in rows}
+
+
+def get_monitored_comic_urls(db_path: str, active_source_urls: Set[str]) -> Set[str]:
+    """Return the comics linked to at least one source still on the watchlist."""
+    conn = _connect(db_path)
+    with conn:
+        _load_active_sources(conn, active_source_urls)
+        rows = conn.execute(
+            """
+            SELECT DISTINCT comic_sources.comic_url
+              FROM comic_sources
+              JOIN active_sources ON active_sources.url = comic_sources.source_url
+            """
+        ).fetchall()
+    conn.close()
+    return {row["comic_url"] for row in rows}
+
+
+class CleanupResult(NamedTuple):
+    newly_unlinked: int
+    relinked: int
+    rows_deleted: int
+
+
+def cleanup_unwatched(
+    db_path: str,
+    active_source_urls: Set[str],
+    retention_s: float,
+    now: float,
+) -> CleanupResult:
+    """Retire comics no watched source provides any more.
+
+    Links belonging to sources that have left the watchlist are dropped, along
+    with those artists' check timestamps, so re-adding an artist fetches its page
+    straight away and restores its links in the same cycle.
+
+    A comic left with no link is stamped *unlinked_since* and, once that has
+    stood for *retention_s*, its row is deleted. A comic that regains a link
+    before then has the stamp cleared. The CBZ on disk is never touched — a
+    comic found again later is matched to its existing file rather than
+    re-downloaded.
+
+    Every column on a comic row is derived from the site or its CBZ, so there is
+    nothing a deletion loses that the next discovery would not rebuild.
+    """
+    conn = _connect(db_path)
+    with conn:
+        _load_active_sources(conn, active_source_urls)
+        conn.execute(
+            "DELETE FROM comic_sources WHERE source_url NOT IN (SELECT url FROM active_sources)"
+        )
+        conn.execute(
+            "DELETE FROM tracked_artists WHERE url NOT IN (SELECT url FROM active_sources)"
+        )
+        relinked = conn.execute(
+            """
+            UPDATE tracked_comics SET unlinked_since = NULL
+             WHERE unlinked_since IS NOT NULL
+               AND url IN (SELECT comic_url FROM comic_sources)
+            """
+        ).rowcount
+        newly_unlinked = conn.execute(
+            """
+            UPDATE tracked_comics SET unlinked_since = ?
+             WHERE unlinked_since IS NULL
+               AND url NOT IN (SELECT comic_url FROM comic_sources)
+            """,
+            (now,),
+        ).rowcount
+        rows_deleted = conn.execute(
+            "DELETE FROM tracked_comics WHERE unlinked_since IS NOT NULL AND unlinked_since <= ?",
+            (now - retention_s,),
+        ).rowcount
+    conn.close()
+    return CleanupResult(
+        newly_unlinked=newly_unlinked, relinked=relinked, rows_deleted=rows_deleted,
     )
 
 

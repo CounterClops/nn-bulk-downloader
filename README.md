@@ -107,6 +107,8 @@ The container uses three mounted volumes:
 | `output_dir` | `./media` | Where CBZ files are saved |
 | `watchlist_file` | `./watchlist.txt` | Path to the plain-text URL list |
 | `poll_interval_minutes` | `60` | Interval between polls in `--watch` mode |
+| `unwatched_retention_days` | `7` | Days a comic with no source left on the watchlist is kept before its database row is removed |
+| `exclude_censored` | `false` | Never download a comic whose thumbnail is blurred on a watched artist's page |
 | `blacklisted_tags` | `[]` | Comics whose **curated** tags match any entry here are skipped |
 | `blacklisted_user_tags` | `[]` | Comics whose **user** tags match any entry here are skipped |
 | `check_updated_feed` | `true` | Fetch `/updated_comics` each cycle to avoid checking every comic |
@@ -203,8 +205,68 @@ time it appears in the updated feed or its `full_check_interval_days` elapses.
    extra requests** per poll.
 3. **Polite delays** — 1 s between image downloads, 2 s between page scrapes.
 
+## Censored comics
+
+The site marks a censored comic by blurring its thumbnail on artist listing pages. That
+blur is the only signal used: there is no tag-based censoring, and a comic's own page
+carries no trace of it. With `exclude_censored` on, a comic blurred on any watched
+artist's page is never downloaded.
+
+Because the blur only appears on listings, a verdict is only as fresh as the last time
+that artist's page was read, and artist pages are normally read once per
+`full_check_interval_days`. A comic falls due on its own schedule, so it can need
+downloading long after its artist was last read. Before any page is downloaded, every
+watched artist listing that comic is therefore read again, unless it was already read
+this cycle:
+
+- **Blurred on any of those pages** → recorded as censored and not downloaded, whichever
+  artist is read first.
+- **An artist page cannot be read** → the download is refused, and the comic stays due so
+  the next cycle tries again. Not being able to confirm the verdict is not treated as
+  permission.
+
+Each artist page is read at most once per cycle, and only for comics that actually need
+pages downloaded; a metadata-only check never triggers one. A comic that becomes censored
+after it was downloaded stops being updated, but its CBZ is left on disk.
+
+A directly watched comic that no watched artist lists has no listing to judge it by, so it
+downloads as normal.
+
+## Removing entries from the watchlist
+
+Every comic is linked to the watchlist entries that provide it: an artist entry links
+every comic its page lists, and a direct comic entry links itself. A comic can have any
+number of sources — if two watched artists both list it, removing one leaves it linked to
+the other, and it carries on being monitored.
+
+Once a comic has **no** source left on the watchlist:
+
+1. **It stops being checked** from the next poll cycle.
+2. **Its row is kept for `unwatched_retention_days`** (default 7). Re-adding a source in
+   that window picks it straight back up — a re-added artist's page is fetched on the
+   next cycle regardless of the full-check interval.
+3. **The row is then deleted** by the cleanup phase at the end of a poll cycle. The CBZ
+   file is never touched.
+
+Links are only added as sources are read, never removed because a listing came back
+shorter. A comic ends its link only when its source leaves the watchlist, so an artist
+page served incompletely cannot make comics look abandoned.
+
+Cleanup is skipped for a cycle, leaving every row as it is, when:
+
+- **a watched source failed to refresh** — it may still provide comics it has not linked
+  yet. The skipped cycle's log names the sources that failed. An artist page answering
+  404 or 410 no longer exists, so it counts as providing nothing rather than as a failure
+  and does not hold cleanup back.
+- **the watchlist yields no sources at all** — a missing watchlist file reads as empty,
+  and would otherwise schedule the whole library for deletion.
+
 ## State database
 
-`watcher.db` (SQLite) tracks each comic's URL, page count, CBZ path, tags, and whether
-it has been blacklisted.  Safe to delete and start fresh — the watcher will re-discover
-and re-download everything.
+`watcher.db` (SQLite) tracks each comic's URL, page count, CBZ path, tags, which
+watchlist entries provide it, and whether it has been blacklisted. Every column is
+derived from the site or the CBZ on disk, so it is safe to delete and start fresh: the
+watcher re-discovers every comic, and one whose CBZ already holds all its pages is
+matched to that file rather than re-downloaded. A comic whose title or author has changed
+on the site since its CBZ was written maps to a new filename, and is downloaded again
+under it.

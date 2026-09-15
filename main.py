@@ -8,13 +8,14 @@ Usage:
 """
 
 import argparse
+import functools
 import json
 import os
 import sys
 import tempfile
 import time
 from time import sleep
-from typing import Dict, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 import requests
 
@@ -26,6 +27,10 @@ from modules import multporn as mp
 from modules import watchlist as wl
 
 VERSION = "1.0.0"
+
+# Artist pages answering with these no longer exist, as opposed to being
+# temporarily unreachable.
+GONE_HTTP_STATUSES = {404, 410}
 USER_AGENT = f"multporn-watcher/{VERSION} (github.com/CounterClops/nn-bulk-downloader)"
 
 
@@ -131,19 +136,142 @@ def _mark_skipped(db_path: str, url: str, title: str, tags: list, reason: str):
 
 
 # ---------------------------------------------------------------------------
+# Artist catalogues
+# ---------------------------------------------------------------------------
+
+class ArtistCatalogues:
+    """Reads artist listings for one poll cycle, each at most once.
+
+    A listing is where comics are discovered and linked to their artist, and the
+    only place the site's blur marker appears — so reading one is also what
+    records whether each comic it lists is censored.
+    """
+
+    def __init__(self, session: requests.Session, db_path: str, exclude_censored: bool):
+        self._session = session
+        self._db_path = db_path
+        self._exclude_censored = exclude_censored
+        self._read_urls: Set[str] = set()
+        self._gone_urls: Set[str] = set()
+        # Every comic any listing read this cycle blurred. A later listing that
+        # shows the same comic unblurred must not release it, or the verdict
+        # would depend on which artist happened to be read last.
+        self._blurred_comic_urls: Set[str] = set()
+        # Pages that could not be read for a reason that may pass: they may
+        # still provide comics they have not linked, so they hold back cleanup.
+        self.failed_urls: List[str] = []
+
+    def refresh(self, artist_url: str) -> bool:
+        """Read *artist_url*'s listing unless this cycle already tried.
+
+        Returns True when the listing was read, so its comics' links and
+        censored verdicts are current.
+        """
+        if artist_url in self._read_urls:
+            return True
+        if artist_url in self._gone_urls or artist_url in self.failed_urls:
+            return False
+
+        logger.info(f"Fetching artist catalogue: {artist_url}")
+        try:
+            listing = mp.fetch_artist_comics(self._session, artist_url)
+            logger.info(
+                f"  Found {len(listing.comic_urls)} comic(s), "
+                f"{len(listing.censored_urls)} marked censored by the site."
+            )
+            for comic_url in listing.comic_urls:
+                db.upsert_comic(self._db_path, comic_url)
+            db.link_comics_to_source(self._db_path, artist_url, listing.comic_urls)
+            self._blurred_comic_urls.update(listing.censored_urls)
+            # The listing is the only place the blur marker appears, so the
+            # censored skip is re-derived here on every read. With the setting
+            # off, an empty set releases anything it held.
+            blurred_in_listing = self._blurred_comic_urls & set(listing.comic_urls)
+            db.sync_censored_skips(
+                self._db_path,
+                listing.comic_urls,
+                blurred_in_listing if self._exclude_censored else set(),
+            )
+            db.upsert_artist_checked(self._db_path, artist_url)
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            if status in GONE_HTTP_STATUSES:
+                # A page that no longer exists provides no comics. Treating it as
+                # a failure would hold back cleanup on every cycle for as long as
+                # the entry stays on the watchlist.
+                logger.error(
+                    f"  Artist page no longer exists (HTTP {status}) — it provides "
+                    f"no comics; consider removing it from the watchlist."
+                )
+                self._gone_urls.add(artist_url)
+            else:
+                logger.error(f"  Failed to fetch artist page: {exc}")
+                self.failed_urls.append(artist_url)
+            return False
+        except Exception as exc:
+            logger.error(f"  Failed to fetch artist page: {exc}")
+            self.failed_urls.append(artist_url)
+            return False
+
+        self._read_urls.add(artist_url)
+        return True
+
+    def download_block_reason(
+        self, comic_url: str, watched_artist_urls: Set[str]
+    ) -> Optional[str]:
+        """Return why *comic_url* must not be downloaded, or None if it may be.
+
+        A censored verdict is only as fresh as the last read of the listing that
+        produced it, and a comic falls due on its own schedule — so a comic can
+        need downloading while its artist's verdict is weeks old, or was never
+        taken at all. Every watched artist linking the comic is therefore read
+        this cycle before any page is fetched. If one cannot be read, the
+        download is refused: with censored comics excluded, not knowing is not
+        permission.
+        """
+        if not self._exclude_censored:
+            return None
+
+        linking_artist_urls = (
+            db.get_comic_source_urls(self._db_path, comic_url) & watched_artist_urls
+        )
+        unreadable_urls = [url for url in sorted(linking_artist_urls) if not self.refresh(url)]
+        if unreadable_urls:
+            return (
+                f"could not read {', '.join(unreadable_urls)} to confirm it is not censored"
+            )
+
+        comic = db.get_comic(self._db_path, comic_url)
+        if comic and comic["skip_reason"] == db.CENSORED_SKIP_REASON:
+            return "it is blurred on a watched artist's page"
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Per-comic processing
 # ---------------------------------------------------------------------------
+
+def _parse_days(config: Dict, key: str, default: int) -> int:
+    """Parse a non-negative whole number of days from config, falling back to
+    *default* when the value is missing or invalid."""
+    try:
+        return max(0, int(config.get(key, default)))
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid {key} in config — defaulting to {default} days.")
+        return default
+
 
 def _parse_interval_days(config: Dict) -> int:
     """Parse and validate full_check_interval_days from config.
 
     Returns a non-negative integer, defaulting to 28 on missing or invalid values.
     """
-    try:
-        return max(0, int(config.get("full_check_interval_days", 28)))
-    except (TypeError, ValueError):
-        logger.warning("Invalid full_check_interval_days in config — defaulting to 28 days.")
-        return 28
+    return _parse_days(config, "full_check_interval_days", 28)
+
+
+def _parse_retention_days(config: Dict) -> int:
+    """Days an unwatched comic's row is kept before cleanup deletes it."""
+    return _parse_days(config, "unwatched_retention_days", 7)
 
 
 def _needs_sync(
@@ -221,6 +349,7 @@ def _process_comic(
     full_check_interval_s: float,
     in_updated_feed: bool = False,
     is_direct_watch: bool = False,
+    download_block_reason: Optional[Callable[[], Optional[str]]] = None,
 ):
     """
     Check a single comic and update its CBZ if anything has changed.
@@ -358,6 +487,14 @@ def _process_comic(
         f"  '{title}': downloading all {remote_count} page(s) for sync "
         f"(stored: {local_count}{', in updated feed' if in_updated_feed else ''})"
     )
+
+    # Asked only once a download is certain: confirming the censored verdict can
+    # cost a listing fetch, which a metadata-only check has no need of.
+    if download_block_reason is not None:
+        block_reason = download_block_reason()
+        if block_reason:
+            logger.warning(f"  '{title}' not downloaded: {block_reason}.")
+            return
 
     # If a previous run recorded a page failure, probe that page first using
     # the freshly-fetched URL (which may have been fixed upstream).
@@ -503,13 +640,19 @@ def run_once(config: Dict, db_path: str):
         logger.info(f"Loaded {len(file_items)} URL(s) from watchlist file: {watchlist_file}")
     all_watched.extend(file_items)
 
-    watched_comics: Set[str] = set()
+    # Every watched entry is a source: the comics it provides stay monitored for
+    # as long as it remains on the watchlist.
+    active_source_urls: Set[str] = set()
+    watched_artist_urls: Set[str] = set()
     direct_comic_urls: Set[str] = set()
+    artists = ArtistCatalogues(session, db_path, exclude_censored)
     for item in all_watched:
         url = mp.normalise_url(item["url"])
         item_type = item.get("type", "")
 
         if item_type == "artist":
+            active_source_urls.add(url)
+            watched_artist_urls.add(url)
             artist_last_checked = db.get_artist_last_checked(db_path, url) or 0
             artist_elapsed_days = (now - artist_last_checked) / 86400
             if (now - artist_last_checked) < full_check_interval_s:
@@ -517,37 +660,14 @@ def run_once(config: Dict, db_path: str):
                     f"Skipping artist page (checked {artist_elapsed_days:.1f}d ago, "
                     f"interval is {interval_days}d): {url}"
                 )
-                # Still collect any comics already in DB that belong to this artist
-                # so they remain in watched_comics for the processing step.
-                for comic in db.get_all_comics(db_path):
-                    watched_comics.add(comic["url"])
                 continue
-            logger.info(f"Fetching artist catalogue: {url}")
-            try:
-                listing = mp.fetch_artist_comics(session, url)
-                logger.info(
-                    f"  Found {len(listing.comic_urls)} comic(s), "
-                    f"{len(listing.censored_urls)} marked censored by the site."
-                )
-                for comic_url in listing.comic_urls:
-                    watched_comics.add(comic_url)
-                    db.upsert_comic(db_path, comic_url)
-                # The listing is the only place the blur marker appears, so the
-                # censored skip is re-derived here on every artist refresh.
-                # With the setting off, an empty set releases anything it held.
-                db.sync_censored_skips(
-                    db_path,
-                    listing.comic_urls,
-                    listing.censored_urls if exclude_censored else set(),
-                )
-                db.upsert_artist_checked(db_path, url)
-            except Exception as exc:
-                logger.error(f"  Failed to fetch artist page: {exc}")
+            artists.refresh(url)
 
         elif item_type == "comic":
-            watched_comics.add(url)
+            active_source_urls.add(url)
             direct_comic_urls.add(url)
             db.upsert_comic(db_path, url)
+            db.link_comics_to_source(db_path, url, [url])
 
     # A comic previously discovered (and tag-blacklisted) via a bulk artist
     # listing may now be directly watched — the user's explicit intent
@@ -556,10 +676,20 @@ def run_once(config: Dict, db_path: str):
     if direct_comic_urls:
         db.clear_tag_blacklist_for_urls(db_path, list(direct_comic_urls))
 
-    # 3. Process every tracked comic that needs attention
+    # 3. Process every monitored comic that needs attention. A comic whose every
+    # source has left the watchlist is no longer checked; cleanup retires it.
+    monitored_urls = db.get_monitored_comic_urls(db_path, active_source_urls)
     all_comics = db.get_all_comics(db_path)
+    unmonitored_count = sum(1 for comic in all_comics if comic["url"] not in monitored_urls)
+    if unmonitored_count:
+        logger.info(
+            f"{unmonitored_count} tracked comic(s) have no source left on the watchlist "
+            f"— not checking them."
+        )
     for comic in all_comics:
         comic_url = comic["url"]
+        if comic_url not in monitored_urls:
+            continue
 
         is_skipped = bool(comic["is_blacklisted"])
         never_downloaded = comic["page_count"] == 0
@@ -590,6 +720,9 @@ def run_once(config: Dict, db_path: str):
         _process_comic(
             session, comic_url, config, db_path, full_check_interval_s,
             in_updated_feed=in_updated_feed, is_direct_watch=is_direct_watch,
+            download_block_reason=functools.partial(
+                artists.download_block_reason, comic_url, watched_artist_urls
+            ),
         )
         sleep(1)
 
@@ -597,6 +730,61 @@ def run_once(config: Dict, db_path: str):
     # update_comic_checked() — no global full-check timestamp needed.
 
     _backfill_hashes(config, db_path)
+
+    _cleanup_unwatched(config, db_path, active_source_urls, artists.failed_urls)
+
+
+# ---------------------------------------------------------------------------
+# Unwatched comic cleanup
+# ---------------------------------------------------------------------------
+
+def _cleanup_unwatched(
+    config: Dict,
+    db_path: str,
+    active_source_urls: Set[str],
+    failed_source_urls: List[str],
+):
+    """Retire comics that no watched source provides, after a retention period.
+
+    Held back entirely in two situations where comics would wrongly look
+    abandoned: when a source failed to refresh this cycle, and when the watchlist
+    yielded no sources at all — load_watchlist reports a missing file as an empty
+    list, so a moved watchlist would otherwise schedule the whole library for
+    deletion.
+    """
+    if not active_source_urls:
+        logger.warning(
+            "Watchlist yielded no sources — skipping unwatched-comic cleanup "
+            "so a missing or unreadable watchlist cannot retire the whole library."
+        )
+        return
+    if failed_source_urls:
+        logger.warning(
+            f"{len(failed_source_urls)} watched source(s) failed to refresh this cycle — "
+            f"skipping unwatched-comic cleanup until every source has been read: "
+            f"{', '.join(failed_source_urls)}"
+        )
+        return
+
+    retention_days = _parse_retention_days(config)
+    result = db.cleanup_unwatched(
+        db_path,
+        active_source_urls,
+        retention_s=retention_days * 86400,
+        now=time.time(),
+    )
+    if result.relinked:
+        logger.info(f"Cleanup: {result.relinked} comic(s) regained a watched source.")
+    if result.newly_unlinked:
+        logger.info(
+            f"Cleanup: {result.newly_unlinked} comic(s) lost their last watched source "
+            f"— rows will be removed after {retention_days}d unless re-linked."
+        )
+    if result.rows_deleted:
+        logger.info(
+            f"Cleanup: removed {result.rows_deleted} comic row(s) unwatched for "
+            f"{retention_days}d or more. CBZ files were left in place."
+        )
 
 
 # ---------------------------------------------------------------------------

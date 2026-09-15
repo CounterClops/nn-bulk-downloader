@@ -197,7 +197,8 @@ def update_comic_info(cbz_path: str, metadata: Dict) -> bool:
             # archive's tail would otherwise linger past the end record.
             handle.truncate(handle.tell())
         _verify_comic_info(cbz_path, payload)
-    except Exception:
+    # BaseException, so a Ctrl+C landing mid-rewrite restores the archive too.
+    except BaseException:
         with open(cbz_path, "r+b") as handle:
             handle.seek(rewrite_start)
             handle.write(original_tail)
