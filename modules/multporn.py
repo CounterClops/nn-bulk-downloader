@@ -1,7 +1,7 @@
 import re
 import time
 from time import sleep
-from typing import Dict, List, NamedTuple, Optional, Set
+from typing import Dict, List, NamedTuple, Optional, Sequence, Set
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
@@ -32,6 +32,18 @@ ARTIST_PATH_SEGMENTS = {
     "authors_hentai_comics",
 }
 MP_COMIC_SEGMENT_RE = re.compile(r"^mp\d+$")
+
+# Drupal renders each taxonomy field in a div carrying its machine name, and the
+# two kinds of comic page name the same fields differently: site comics label
+# the artist "Author:" in field-author, while user content (/mp<nodeid>) labels
+# it "Artist:" in field-artist-term. Each logical field therefore lists every
+# machine name it is known to appear under, and a page missing all of them
+# simply yields no terms.
+AUTHOR_FIELD_CLASSES = ("field-name-field-author", "field-name-field-artist-term")
+SECTION_FIELD_CLASSES = ("field-name-field-com-group", "field-name-field-section-term")
+CHARACTER_FIELD_CLASSES = ("field-name-field-characters",)
+TAG_FIELD_CLASSES = ("field-name-field-category",)
+USER_TAG_FIELD_CLASSES = ("field-name-field-user-tags",)
 
 
 class ArtistListing(NamedTuple):
@@ -116,38 +128,48 @@ def _extract_title(soup: BeautifulSoup) -> Optional[str]:
     return None
 
 
-def _extract_tags(soup: BeautifulSoup) -> List[str]:
-    """Collect tags from all Drupal taxonomy field divs on the page."""
-    tags: List[str] = []
-    seen: set = set()
+def _extract_taxonomy_terms(
+    soup: BeautifulSoup, field_classes: Sequence[str]
+) -> List[str]:
+    """Return the taxonomy term names linked from a field's div, if the page has one.
 
-    candidate_classes = [
-        "field-name-field-tags",
-        "field-name-field-category",
-        "field-name-field-character",
-        "field-name-field-language",
-        "field-name-field-series",
-    ]
+    *field_classes* lists the machine names the field is known to appear under;
+    all of them are read, since a page may use either spelling. Order is the
+    page's own and duplicates are dropped — a term occasionally appears twice
+    when the site links both a term and its alias. A page carrying none of these
+    fields yields an empty list rather than an error: most optional fields are
+    absent on most comics.
+    """
+    terms: List[str] = []
+    seen: Set[str] = set()
 
-    for field_class in candidate_classes:
-        div = soup.find("div", class_=field_class)
-        if div:
-            for a in div.find_all("a"):
-                text = a.get_text(strip=True)
+    for field_class in field_classes:
+        for div in soup.find_all("div", class_=field_class):
+            for anchor in div.find_all("a"):
+                text = anchor.get_text(strip=True)
                 if text and text not in seen:
-                    tags.append(text)
+                    terms.append(text)
                     seen.add(text)
 
-    return tags
+    return terms
 
 
 def _extract_author(soup: BeautifulSoup) -> str:
-    """Return the first author name found by looking for artist page links."""
+    """Return the comic's author.
+
+    The ``Author:`` field div is authoritative where the page has one. User
+    content pages (``/mp<nodeid>``) omit it, so those fall back to scanning for
+    the first link that points at an artist page.
+    """
+    field_authors = _extract_taxonomy_terms(soup, AUTHOR_FIELD_CLASSES)
+    if field_authors:
+        return field_authors[0]
+
     artist_tokens = tuple(f"/{segment}/" for segment in ARTIST_PATH_SEGMENTS)
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
+    for anchor in soup.find_all("a", href=True):
+        href = anchor["href"]
         if "/user_content/artists/" in href or any(token in href for token in artist_tokens):
-            name = a.get_text(strip=True)
+            name = anchor.get_text(strip=True)
             if name:
                 return name
     return ""
@@ -172,7 +194,16 @@ def _extract_language(soup: BeautifulSoup) -> str:
 def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
     """
     Return a dict with keys:
-      node_id, title, author, tags, language, image_urls, page_count
+      node_id, title, author, sections, characters, tags, user_tags,
+      language, image_urls, page_count
+
+    *sections* is the site's "Section:" field — the series or franchise a comic
+    belongs to, which is frequently multi-valued. *tags* is the curated "Tags:"
+    field and *user_tags* the community-editable "User tags:" field; they are
+    kept apart because the two vocabularies differ in both quality and intent.
+
+    Every field but the title and pages is optional, and each is reported as an
+    empty list when the page does not carry it.
     """
     parts = normalise_url(url).split("/")
     if len(parts) < 4:
@@ -194,7 +225,10 @@ def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
 
     soup = BeautifulSoup(resp.text, "lxml")
     title = _extract_title(soup) or parts[-1].replace("-", " ").replace("_", " ")
-    tags = _extract_tags(soup)
+    tags = _extract_taxonomy_terms(soup, TAG_FIELD_CLASSES)
+    user_tags = _extract_taxonomy_terms(soup, USER_TAG_FIELD_CLASSES)
+    sections = _extract_taxonomy_terms(soup, SECTION_FIELD_CLASSES)
+    characters = _extract_taxonomy_terms(soup, CHARACTER_FIELD_CLASSES)
     author = _extract_author(soup)
     language = _extract_language(soup)
 
@@ -217,7 +251,10 @@ def fetch_comic_metadata(session: requests.Session, url: str) -> Dict:
         "node_id": node_id,
         "title": title,
         "author": author,
+        "sections": sections,
+        "characters": characters,
         "tags": tags,
+        "user_tags": user_tags,
         "language": language,
         "image_urls": image_urls,
         "page_count": len(image_urls),

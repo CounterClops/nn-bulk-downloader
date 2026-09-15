@@ -61,6 +61,37 @@ def _resolve_abs_cbz(output_dir: str, raw: str) -> str:
     return os.path.normpath(os.path.join(output_dir, raw))
 
 
+def _comic_info_metadata(meta: Dict, url: str) -> Dict:
+    """Build the ComicInfo payload for a comic from its freshly-fetched metadata."""
+    return {
+        "title":      meta["title"],
+        "author":     meta["author"],
+        "sections":   meta.get("sections") or [],
+        "characters": meta.get("characters") or [],
+        "tags":       meta.get("tags") or [],
+        "user_tags":  meta.get("user_tags") or [],
+        "web":        url,
+        "notes":      f"Downloaded by multporn-watcher v{VERSION}",
+    }
+
+
+def _refresh_comic_info(cbz_path: str, metadata: Dict, title: str) -> bool:
+    """Bring an existing CBZ's ComicInfo.xml up to date without touching pages.
+
+    Returns True when the file was rewritten. Site metadata changes long after a
+    comic stops gaining pages — sections and characters get filled in by editors
+    over time — so a check that finds no new pages still propagates what it read.
+    """
+    try:
+        rewritten = cbz.update_comic_info(cbz_path, metadata)
+    except Exception as exc:
+        logger.error(f"  Failed to update ComicInfo.xml for '{title}': {exc}")
+        return False
+    if rewritten:
+        logger.info(f"  Metadata changed on site — updated ComicInfo.xml in place for '{title}'.")
+    return rewritten
+
+
 def _is_blacklisted(tags: list, blacklist: list) -> bool:
     tags_lower = {t.lower() for t in tags}
     return any(b.lower() in tags_lower for b in blacklist)
@@ -142,6 +173,17 @@ def _needs_sync(
     return False
 
 
+def _describe_last_checked(last_checked: float, now: float) -> str:
+    """Phrase a comic's last check for the log.
+
+    An unset timestamp means the comic has never been checked (or was queued for
+    a recheck), and measuring from the epoch would report it as decades old.
+    """
+    if not last_checked:
+        return "not yet checked"
+    return f"last checked {(now - last_checked) / 86400:.1f}d ago"
+
+
 def _needs_check(
     is_skipped: bool,
     skip_reason: Optional[str],
@@ -195,6 +237,7 @@ def _process_comic(
     inside the CBZ as ``NNN.ext.archive_K`` rather than deleted.
     """
     blacklist = config.get("blacklisted_tags", [])
+    user_tag_blacklist = config.get("blacklisted_user_tags", [])
     allowed_languages = config.get("allowed_languages", ["en"])
     output_dir = config["output_dir"]
 
@@ -213,6 +256,8 @@ def _process_comic(
     language = meta["language"]
     image_urls = meta["image_urls"]
     remote_count = meta["page_count"]
+    user_tags = meta.get("user_tags") or []
+    comic_info = _comic_info_metadata(meta, url)
 
     # Language filter check
     if not _is_language_allowed(language, allowed_languages):
@@ -227,7 +272,15 @@ def _process_comic(
     # are exempt, regardless of their tags.
     if not is_direct_watch and _is_blacklisted(tags, blacklist):
         logger.warning(f"  '{title}' matches blacklisted tag — skipping and marking.")
-        _mark_skipped(db_path, url, title, tags, "tag")
+        _mark_skipped(db_path, url, title, tags, db.TAG_SKIP_REASON)
+        return
+
+    # User tags are community-editable, so they get their own list rather than
+    # sharing blacklisted_tags: the same word can be a deliberate filter in the
+    # curated vocabulary and noise in the community one.
+    if not is_direct_watch and _is_blacklisted(user_tags, user_tag_blacklist):
+        logger.warning(f"  '{title}' matches blacklisted user tag — skipping and marking.")
+        _mark_skipped(db_path, url, title, tags, db.USER_TAG_SKIP_REASON)
         return
 
     # Every filter passed. If an earlier run skipped this comic, that decision
@@ -270,9 +323,11 @@ def _process_comic(
             )
         else:
             logger.info(f"  '{title}' is up to date ({local_count} pages).")
+        refreshed = _refresh_comic_info(cbz_path, comic_info, title)
         db.update_comic_checked(
             db_path, url, local_count, json.dumps(tags),
             _make_rel_cbz(output_dir, cbz_path), title, meta["node_id"],
+            cbz_hash=cbz.hash_cbz(cbz_path) if refreshed else None,
         )
         return
 
@@ -285,6 +340,7 @@ def _process_comic(
                 f"  '{title}' CBZ exists on disk with {disk_count} page(s) "
                 f"(remote: {remote_count}) — skipping download."
             )
+            _refresh_comic_info(cbz_path, comic_info, title)
             cbz_hash = cbz.hash_cbz(cbz_path)
             db.update_comic_checked(
                 db_path, url, disk_count, json.dumps(tags),
@@ -352,23 +408,14 @@ def _process_comic(
             logger.warn(f"  Download incomplete for '{title}' — CBZ not modified.")
             return
 
-        metadata = {
-            "title":   title,
-            "series":  author,
-            "web":     url,
-            "tags":    tags,
-            "writer":  author,
-            "notes":   f"Downloaded by multporn-watcher v{VERSION}",
-        }
-
         try:
             if local_count == 0:
                 logger.info(f"  Creating CBZ: {cbz_path}")
-                cbz.create_cbz(cbz_path, remote_image_paths, metadata)
+                cbz.create_cbz(cbz_path, remote_image_paths, comic_info)
                 stats = {"live_pages": len(remote_image_paths), "pages_archived": 0, "pages_unchanged": 0}
             else:
                 logger.info(f"  Syncing CBZ: {cbz_path}")
-                stats = cbz.sync_cbz(cbz_path, remote_image_paths, metadata)
+                stats = cbz.sync_cbz(cbz_path, remote_image_paths, comic_info)
         except Exception as exc:
             logger.error(f"  Failed to write CBZ: {exc}")
             return
@@ -531,14 +578,14 @@ def run_once(config: Dict, db_path: str):
             continue
 
         if is_skipped:
-            elapsed = (now - last_checked) / 86400
             logger.info(
                 f"Re-checking skipped comic ({comic['skip_reason']}, "
-                f"last checked {elapsed:.1f}d ago): {comic_url}"
+                f"{_describe_last_checked(last_checked, now)}): {comic_url}"
             )
         elif due_for_full_check and not never_downloaded and not in_updated_feed:
-            elapsed = (now - last_checked) / 86400
-            logger.info(f"Full-check due for: {comic_url} (last checked {elapsed:.1f}d ago)")
+            logger.info(
+                f"Full-check due for: {comic_url} ({_describe_last_checked(last_checked, now)})"
+            )
 
         _process_comic(
             session, comic_url, config, db_path, full_check_interval_s,

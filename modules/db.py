@@ -63,6 +63,7 @@ def init_db(db_path: str):
         """)
         _clear_legacy_censored_skips(conn)
         _normalise_stored_urls(conn)
+        _queue_comic_info_recheck(conn)
     conn.close()
 
 
@@ -175,6 +176,37 @@ def _clear_legacy_censored_skips(conn: sqlite3.Connection):
     )
 
 
+COMIC_INFO_RECHECK_KEY = "comic_info_fields_recheck_queued"
+
+
+def _queue_comic_info_recheck(conn: sqlite3.Connection):
+    """Bring every tracked comic up for one full re-check on the next run.
+
+    ComicInfo.xml gained sections, characters and namespaced user tags, and
+    /mp<nodeid> pages had their section and artist fields read for the first
+    time. Every CBZ written before that carries metadata the site has held all
+    along, but a comic is only re-read once its full-check interval lapses — so
+    left alone the library would take a whole interval to catch up.
+
+    Clearing last_checked makes each comic due immediately. A comic whose page
+    count still matches is never re-downloaded: its page is re-read and only
+    ComicInfo.xml is rewritten, and only where it differs. The clear survives an
+    interrupted run, since a comic re-stamps last_checked only once it has
+    actually been checked.
+    """
+    already_queued = conn.execute(
+        "SELECT 1 FROM settings WHERE key = ?", (COMIC_INFO_RECHECK_KEY,)
+    ).fetchone()
+    if already_queued:
+        return
+
+    conn.execute("UPDATE tracked_comics SET last_checked = NULL")
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?)",
+        (COMIC_INFO_RECHECK_KEY, str(time.time())),
+    )
+
+
 def upsert_comic(db_path: str, url: str, **fields):
     """Insert a new comic if it doesn't exist, then apply any extra field updates."""
     conn = _connect(db_path)
@@ -284,6 +316,11 @@ def upsert_artist_checked(db_path: str, url: str):
 
 
 CENSORED_SKIP_REASON = "censored"
+TAG_SKIP_REASON = "tag"
+USER_TAG_SKIP_REASON = "user_tag"
+
+# Both tag filters are bulk-discovery decisions a direct watch overrides.
+_TAG_SKIP_REASONS = (TAG_SKIP_REASON, USER_TAG_SKIP_REASON)
 
 # SQLite caps the variables allowed in one statement; artist listings are far
 # smaller than this, but chunking keeps the query safe for any listing size.
@@ -337,27 +374,29 @@ def sync_censored_skips(db_path: str, listed_urls: List[str], censored_urls: Set
 
 
 def clear_tag_blacklist_for_urls(db_path: str, urls: List[str]):
-    """Clear is_blacklisted/skip_reason for specific URLs currently flagged
-    skip_reason == 'tag'.
+    """Clear is_blacklisted/skip_reason for specific URLs flagged by a tag filter.
 
     Used when a comic previously discovered (and tag-blacklisted) via a bulk
     artist listing becomes directly watched — the user's explicit intent to
     track it overrides the earlier bulk-scoped blacklist decision, so it is
-    unblocked for re-evaluation. Only 'tag' entries are cleared; 'censored'
-    and 'language' skip reasons are untouched even for direct watches.
+    unblocked for re-evaluation. Both tag filters are cleared, since a direct
+    watch is exempt from each; 'censored' and 'language' skip reasons are
+    untouched even for direct watches.
     """
     if not urls:
         return
     conn = _connect(db_path)
     with conn:
-        placeholders = ", ".join("?" for _ in urls)
+        url_placeholders = ", ".join("?" for _ in urls)
+        reason_placeholders = ", ".join("?" for _ in _TAG_SKIP_REASONS)
         conn.execute(
             f"""
             UPDATE tracked_comics
                SET is_blacklisted = 0, skip_reason = NULL
-             WHERE skip_reason = 'tag' AND url IN ({placeholders})
+             WHERE skip_reason IN ({reason_placeholders})
+               AND url IN ({url_placeholders})
             """,
-            list(urls),
+            list(_TAG_SKIP_REASONS) + list(urls),
         )
     conn.close()
 

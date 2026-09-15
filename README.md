@@ -11,8 +11,11 @@ downloads pages, and keeps local **CBZ archives** up-to-date — complete with a
   changes without polling every tracked comic individually
 - Downloads only **new pages** — never re-downloads what you already have
 - Stores each comic as a **CBZ** with a correctly formatted `ComicInfo.xml`
-  (title, series, tags, page count, source URL, author)
-- **Tag blacklisting** — skip comics that match unwanted tags
+  (title, series, characters, curated and user tags, page count, source URL, author)
+- **Metadata refresh** — when the site's tags, sections or characters change, the
+  existing `ComicInfo.xml` is rewritten in place without re-downloading any pages
+- **Tag blacklisting** — skip comics that match unwanted tags, with separate
+  lists for the site's curated tags and its community-editable user tags
 - **Daemon mode** (`--watch`) for continuous background monitoring
 - Respects site bandwidth: uses the lightweight update feed + per-comic XML endpoint,
   with polite `sleep()` pauses between requests
@@ -104,7 +107,8 @@ The container uses three mounted volumes:
 | `output_dir` | `./media` | Where CBZ files are saved |
 | `watchlist_file` | `./watchlist.txt` | Path to the plain-text URL list |
 | `poll_interval_minutes` | `60` | Interval between polls in `--watch` mode |
-| `blacklisted_tags` | `[]` | Comics whose tags match any entry here are skipped |
+| `blacklisted_tags` | `[]` | Comics whose **curated** tags match any entry here are skipped |
+| `blacklisted_user_tags` | `[]` | Comics whose **user** tags match any entry here are skipped |
 | `check_updated_feed` | `true` | Fetch `/updated_comics` each cycle to avoid checking every comic |
 | `updated_feed_pages` | `2` | How many feed pages to scan per cycle |
 | `watched_items` | `[]` | Optional JSON list of `{"type": "comic"/"artist", "url": "..."}` entries |
@@ -144,8 +148,52 @@ Each comic is stored as `<output_dir>/<sanitized_title>.cbz` containing:
 ComicInfo.xml
 ```
 
-`ComicInfo.xml` includes: `Title`, `Series` (artist), `Web` (source URL), `Tags`,
-`PageCount`, `Writer`, `Penciller`, and `Notes`.
+`ComicInfo.xml` includes: `Title`, `Series`, `Notes`, `Writer`, `Penciller`, `Tags`,
+`Web` (source URL), `PageCount`, `Characters`, and `SeriesGroup`, emitted in the order
+`ComicInfo.xsd` declares them.
+
+The site's fields map on as follows:
+
+| Site field | ComicInfo field |
+| --- | --- |
+| `Author:` / `Artist:` | `Writer` and `Penciller` |
+| `Section:` | `Series` (first value), `SeriesGroup` (all values), `Tags` as `parody:` |
+| `Characters:` | `Characters` |
+| `Tags:` | `Tags` as `tag:` |
+| `User tags:` | `Tags` as `other:` |
+
+`Series` takes a single string, so a comic listed under several sections keeps the first
+as its series and carries the full list in `SeriesGroup`. A comic with no section falls
+back to its own title, so it stands alone in a library rather than being filed under its
+artist.
+
+ComicInfo offers a single `Tags` field, so the vocabularies that share it are marked with
+a namespace prefix, the way other providers' ComicInfo files do:
+
+```xml
+<Tags>tag: Titfuck, tag: Oral, other: Ebony, other: AI Generated, parody: Others</Tags>
+```
+
+This keeps the site's curated `Tags:` distinguishable from the community-editable
+`User tags:` once both are in the same field. Every field except the title and page count
+is optional — a comic missing sections, characters or either tag list simply has those
+entries left out, and the element is omitted entirely when nothing fills it.
+
+Both kinds of comic page are read: site comics name their fields `field-author` and
+`field-com-group`, while user content (`/mp<nodeid>`) uses `field-artist-term` and
+`field-section-term`.
+
+### Updating metadata in place
+
+When a check finds no new pages but the site's metadata has changed, only the archive's
+`ComicInfo.xml` is rewritten — the pages are left byte-for-byte untouched and nothing is
+re-downloaded. The replacement entry and a fresh central directory are written over the
+old central directory, so a metadata refresh moves a few hundred bytes rather than
+repacking an archive that may be hundreds of megabytes. The previous entry is left behind
+as an unreferenced hole, which the next full sync reclaims.
+
+Refreshes ride the normal check schedule, so a comic picks up changed metadata the next
+time it appears in the updated feed or its `full_check_interval_days` elapses.
 
 ## How bandwidth is kept low
 
