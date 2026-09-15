@@ -11,7 +11,7 @@ from modules.watchlist import load_watchlist
     [
         ("https://multporn.net/comics/example", "comic"),
         ("https://multporn.net/hentai_manga/example", "comic"),
-        ("https://multporn.net/mp123456789", "comic"),
+        ("https://multporn.net/mp000000001", "comic"),
         ("https://multporn.net/authors_comics/example_artist", "artist"),
         ("https://multporn.net/authors_hentai_comics/example_artist", "artist"),
         ("https://multporn.net/user_content/artists/example_artist", "artist"),
@@ -23,7 +23,7 @@ def test_detect_url_type_supported_segments(url, expected):
 
 def test_detect_url_type_rejects_unknown_segment():
     with pytest.raises(ValueError, match="Unrecognised URL segment"):
-        detect_url_type("https://multporn.net/not_a_real_section/foo")
+        detect_url_type("https://multporn.net/not_a_real_section/example_comic")
 
 
 # ---------------------------------------------------------------------------
@@ -37,27 +37,27 @@ class TestWatchlistNormalisation:
         return str(path)
 
     def test_query_string_is_stripped(self, tmp_path):
-        path = self._write(tmp_path, "https://multporn.net/comics/foo?r=1\n")
+        path = self._write(tmp_path, "https://multporn.net/comics/example_foo?r=1\n")
         items = load_watchlist(path)
-        assert [i["url"] for i in items] == ["https://multporn.net/comics/foo"]
+        assert [i["url"] for i in items] == ["https://multporn.net/comics/example_foo"]
 
     def test_variants_collapse_to_one_entry(self, tmp_path):
         path = self._write(tmp_path, "\n".join([
-            "https://multporn.net/comics/foo",
-            "https://multporn.net/comics/foo?r=1",
-            "https://multporn.net/comics/foo?rule34=2",
-            "https://multporn.net/comics/foo/",
+            "https://multporn.net/comics/example_foo",
+            "https://multporn.net/comics/example_foo?r=1",
+            "https://multporn.net/comics/example_foo?rule34=2",
+            "https://multporn.net/comics/example_foo/",
         ]) + "\n")
         items = load_watchlist(path)
-        assert [i["url"] for i in items] == ["https://multporn.net/comics/foo"]
+        assert [i["url"] for i in items] == ["https://multporn.net/comics/example_foo"]
 
     def test_distinct_comics_are_kept(self, tmp_path):
         path = self._write(tmp_path, "\n".join([
-            "https://multporn.net/comics/foo?r=1",
-            "https://multporn.net/comics/bar?r=1",
+            "https://multporn.net/comics/example_foo?r=1",
+            "https://multporn.net/comics/example_bar?r=1",
         ]) + "\n")
         items = load_watchlist(path)
         assert [i["url"] for i in items] == [
-            "https://multporn.net/comics/foo",
-            "https://multporn.net/comics/bar",
+            "https://multporn.net/comics/example_foo",
+            "https://multporn.net/comics/example_bar",
         ]

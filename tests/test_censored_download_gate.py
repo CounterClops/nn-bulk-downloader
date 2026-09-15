@@ -19,19 +19,19 @@ from modules import cbz_manager as cbz
 from modules import db
 from modules.multporn import ArtistListing
 
-ARTIST = "https://multporn.net/authors_comics/incognitymous"
-OTHER_ARTIST = "https://multporn.net/authors_comics/someone_else"
-BLURRED = "https://multporn.net/comics/cindy_x_riley"
-CLEAR = "https://multporn.net/comics/glory_haunt"
-DIRECT = "https://multporn.net/comics/direct_only"
+ARTIST = "https://multporn.net/authors_comics/example_blurring_artist"
+OTHER_ARTIST = "https://multporn.net/authors_comics/example_other_artist"
+BLURRED = "https://multporn.net/comics/example_blurred_comic"
+CLEAR = "https://multporn.net/comics/example_clear_comic"
+DIRECT = "https://multporn.net/comics/example_direct_only"
 
 
 def _meta(url: str) -> dict:
     return {
         "node_id": "1",
         "title": url.rsplit("/", 1)[-1],
-        "author": "Incognitymous",
-        "tags": ["Mini Girl"],
+        "author": "Example Author",
+        "tags": ["Curated Tag A"],
         "language": "en",
         "image_urls": [f"{url}/1.png", f"{url}/2.png"],
         "page_count": 2,

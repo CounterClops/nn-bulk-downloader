@@ -19,7 +19,7 @@ class TestLastSynced:
     def test_last_synced_written_when_provided(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/test"
+            url = "https://multporn.net/comics/example_test"
             db.upsert_comic(db_path, url)
             ts = time.time()
             db.update_comic_checked(
@@ -34,7 +34,7 @@ class TestLastSynced:
     def test_last_synced_unchanged_when_none(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/test2"
+            url = "https://multporn.net/comics/example_test2"
             db.upsert_comic(db_path, url)
             ts = time.time() - 100
             # First call sets last_synced
@@ -55,7 +55,7 @@ class TestLastSynced:
     def test_last_synced_null_initially(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/test3"
+            url = "https://multporn.net/comics/example_test3"
             db.upsert_comic(db_path, url)
             # update_comic_checked without last_synced — should remain NULL
             db.update_comic_checked(
@@ -69,7 +69,7 @@ class TestLastSynced:
     def test_last_synced_can_be_updated(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/test4"
+            url = "https://multporn.net/comics/example_test4"
             db.upsert_comic(db_path, url)
             ts1 = time.time() - 200
             ts2 = time.time()
@@ -97,7 +97,7 @@ class TestFailedPage:
     def test_failed_page_initially_none(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/fp1"
+            url = "https://multporn.net/comics/example_fp1"
             db.upsert_comic(db_path, url)
             row = db.get_comic(db_path, url)
             assert row["failed_page"] is None
@@ -107,7 +107,7 @@ class TestFailedPage:
     def test_set_failed_page(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/fp2"
+            url = "https://multporn.net/comics/example_fp2"
             db.upsert_comic(db_path, url)
             db.set_comic_failed_page(db_path, url, 42)
             row = db.get_comic(db_path, url)
@@ -118,7 +118,7 @@ class TestFailedPage:
     def test_clear_failed_page(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/fp3"
+            url = "https://multporn.net/comics/example_fp3"
             db.upsert_comic(db_path, url)
             db.set_comic_failed_page(db_path, url, 7)
             db.set_comic_failed_page(db_path, url, None)
@@ -138,7 +138,7 @@ class TestClearTagBlacklistForUrls:
     def test_clears_matching_tag_entries_in_list(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/tag1"
+            url = "https://multporn.net/comics/example_tag1"
             db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason="tag")
 
             db.clear_tag_blacklist_for_urls(db_path, [url])
@@ -152,10 +152,10 @@ class TestClearTagBlacklistForUrls:
     def test_does_not_clear_tag_entries_not_in_list(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/tag2"
+            url = "https://multporn.net/comics/example_tag2"
             db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason="tag")
 
-            db.clear_tag_blacklist_for_urls(db_path, ["https://example.com/comics/other"])
+            db.clear_tag_blacklist_for_urls(db_path, ["https://multporn.net/comics/example_other"])
 
             row = db.get_comic(db_path, url)
             assert row["is_blacklisted"] == 1
@@ -166,8 +166,8 @@ class TestClearTagBlacklistForUrls:
     def test_does_not_clear_other_reasons_even_if_url_in_list(self):
         db_path = self._make_db()
         try:
-            censored_url = "https://example.com/comics/censored1"
-            language_url = "https://example.com/comics/language1"
+            censored_url = "https://multporn.net/comics/example_censored1"
+            language_url = "https://multporn.net/comics/example_language1"
             db.upsert_comic(db_path, censored_url, is_blacklisted=1, skip_reason="censored")
             db.upsert_comic(db_path, language_url, is_blacklisted=1, skip_reason="language")
 
@@ -186,7 +186,7 @@ class TestClearTagBlacklistForUrls:
     def test_empty_urls_list_is_no_op(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/tag3"
+            url = "https://multporn.net/comics/example_tag3"
             db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason="tag")
 
             db.clear_tag_blacklist_for_urls(db_path, [])
@@ -200,7 +200,7 @@ class TestClearTagBlacklistForUrls:
     def test_no_op_when_no_matching_entries(self):
         db_path = self._make_db()
         try:
-            url = "https://example.com/comics/tag4"
+            url = "https://multporn.net/comics/example_tag4"
             db.upsert_comic(db_path, url)
 
             db.clear_tag_blacklist_for_urls(db_path, [url])

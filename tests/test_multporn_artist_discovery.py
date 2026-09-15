@@ -24,7 +24,7 @@ def test_fetch_artist_comics_includes_mp_urls():
     artist_url = "https://multporn.net/user_content/artists/example_artist"
     html = """
     <html><body>
-      <a href="/mp123456789">mp item</a>
+      <a href="/mp000000001">mp item</a>
       <a href="/comics/example_comic">classic item</a>
     </body></html>
     """
@@ -32,7 +32,7 @@ def test_fetch_artist_comics_includes_mp_urls():
     session = _FakeSession({artist_url: html})
     listing = fetch_artist_comics(session, artist_url)
 
-    assert "https://multporn.net/mp123456789" in listing.comic_urls
+    assert "https://multporn.net/mp000000001" in listing.comic_urls
     assert "https://multporn.net/comics/example_comic" in listing.comic_urls
     assert listing.censored_urls == set()
 
@@ -46,13 +46,13 @@ def test_fetch_artist_comics_includes_mp_urls():
 LISTING_HTML = """
 <html><body>
   <div class="views-field views-field-field-preview"><div class="field-content">
-    <a href="/comics/clean_one">
-      <img src="https://multporn.net/sites/default/files/styles/taxonomy_comics/public/clean.jpg">
+    <a href="/comics/example_clean_one">
+      <img src="https://multporn.net/sites/default/files/styles/taxonomy_comics/public/example_clean.jpg">
     </a>
   </div></div>
   <div class="views-field views-field-field-preview"><div class="field-content">
-    <a href="/comics/blurred_one">
-      <img src="https://multporn.net/sites/default/files/styles/blur_comics/public/blurred.png">
+    <a href="/comics/example_blurred_one">
+      <img src="https://multporn.net/sites/default/files/styles/blur_comics/public/example_blurred.png">
     </a>
   </div></div>
 </body></html>
@@ -67,8 +67,8 @@ class TestCensoredReporting:
 
         listing = fetch_artist_comics(session, artist_url)
 
-        assert "https://multporn.net/comics/blurred_one" in listing.comic_urls
-        assert "https://multporn.net/comics/clean_one" in listing.comic_urls
+        assert "https://multporn.net/comics/example_blurred_one" in listing.comic_urls
+        assert "https://multporn.net/comics/example_clean_one" in listing.comic_urls
 
     def test_only_blurred_entries_are_marked_censored(self):
         artist_url = "https://multporn.net/authors_comics/example"
@@ -76,7 +76,7 @@ class TestCensoredReporting:
 
         listing = fetch_artist_comics(session, artist_url)
 
-        assert listing.censored_urls == {"https://multporn.net/comics/blurred_one"}
+        assert listing.censored_urls == {"https://multporn.net/comics/example_blurred_one"}
 
     def test_censored_urls_are_a_subset_of_comic_urls(self):
         artist_url = "https://multporn.net/authors_comics/example"

@@ -30,18 +30,18 @@ def _minimal_png(color: tuple) -> bytes:
 
 
 ORIGINAL_METADATA = {
-    "title":      "The Blame Game",
-    "author":     "Palcomix",
-    "sections":   ["Teen Titans"],
+    "title":      "Example Team Comic",
+    "author":     "Example Author",
+    "sections":   ["Example Series"],
     "characters": [],
-    "tags":       ["BDSM"],
-    "web":        "https://multporn.net/comics/the_blame_game",
+    "tags":       ["Curated Tag A"],
+    "web":        "https://multporn.net/comics/example_team_comic",
 }
 
 ENRICHED_METADATA = dict(
     ORIGINAL_METADATA,
-    sections=["Teen Titans", "DC Universe"],
-    characters=["Raven", "Starfire", "Cyborg"],
+    sections=["Example Series", "Example Universe"],
+    characters=["Character One", "Character Two", "Character Three"],
 )
 
 
@@ -106,8 +106,8 @@ class TestWrittenMetadata:
             cbz_path = _build_cbz(directory)
             update_comic_info(cbz_path, ENRICHED_METADATA)
             stored = read_comic_info(cbz_path).decode()
-            assert "<Characters>Raven, Starfire, Cyborg</Characters>" in stored
-            assert "<SeriesGroup>Teen Titans, DC Universe</SeriesGroup>" in stored
+            assert "<Characters>Character One, Character Two, Character Three</Characters>" in stored
+            assert "<SeriesGroup>Example Series, Example Universe</SeriesGroup>" in stored
 
     def test_page_count_comes_from_the_archive_not_the_caller(self):
         """A refresh must never contradict the pages actually present."""
@@ -166,7 +166,7 @@ class TestArchiveWithoutComicInfo:
 
             assert read_comic_info(cbz_path) is None
             assert update_comic_info(cbz_path, ENRICHED_METADATA) is True
-            assert b"<Characters>Raven, Starfire, Cyborg</Characters>" in read_comic_info(cbz_path)
+            assert b"<Characters>Character One, Character Two, Character Three</Characters>" in read_comic_info(cbz_path)
             with zipfile.ZipFile(cbz_path) as archive:
                 assert archive.testzip() is None
                 assert "0001.png" in archive.namelist()

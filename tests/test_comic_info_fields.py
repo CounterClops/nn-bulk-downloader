@@ -31,43 +31,43 @@ def _tags(metadata: dict) -> list:
 
 
 FULL_METADATA = {
-    "title":      "The Blame Game",
-    "author":     "Palcomix",
-    "sections":   ["Teen Titans", "DC Universe"],
-    "characters": ["Raven", "Starfire", "Cyborg", "Robin", "Beast Boy"],
-    "tags":       ["BDSM", "Mini Girl"],
-    "user_tags":  ["Force", "AI Generated"],
-    "web":        "https://multporn.net/comics/the_blame_game",
+    "title":      "Example Team Comic",
+    "author":     "Example Author",
+    "sections":   ["Example Series", "Example Universe"],
+    "characters": ["Character One", "Character Two", "Character Three", "Character Four", "Character Five"],
+    "tags":       ["Curated Tag A", "Curated Tag B"],
+    "user_tags":  ["User Tag A", "User Tag B"],
+    "web":        "https://multporn.net/comics/example_team_comic",
     "page_count": 24,
 }
 
 
 class TestNamespacedTags:
     def test_curated_tags_use_the_tag_namespace(self):
-        assert "tag: BDSM" in _tags(FULL_METADATA)
-        assert "tag: Mini Girl" in _tags(FULL_METADATA)
+        assert "tag: Curated Tag A" in _tags(FULL_METADATA)
+        assert "tag: Curated Tag B" in _tags(FULL_METADATA)
 
     def test_user_tags_use_the_other_namespace(self):
-        assert "other: Force" in _tags(FULL_METADATA)
-        assert "other: AI Generated" in _tags(FULL_METADATA)
+        assert "other: User Tag A" in _tags(FULL_METADATA)
+        assert "other: User Tag B" in _tags(FULL_METADATA)
 
     def test_sections_use_the_parody_namespace(self):
-        assert "parody: Teen Titans" in _tags(FULL_METADATA)
-        assert "parody: DC Universe" in _tags(FULL_METADATA)
+        assert "parody: Example Series" in _tags(FULL_METADATA)
+        assert "parody: Example Universe" in _tags(FULL_METADATA)
 
     def test_vocabularies_appear_in_a_stable_order(self):
         assert _tags(FULL_METADATA) == [
-            "tag: BDSM", "tag: Mini Girl",
-            "other: Force", "other: AI Generated",
-            "parody: Teen Titans", "parody: DC Universe",
+            "tag: Curated Tag A", "tag: Curated Tag B",
+            "other: User Tag A", "other: User Tag B",
+            "parody: Example Series", "parody: Example Universe",
         ]
 
     def test_site_casing_is_preserved(self):
-        assert "other: AI Generated" in _tags(FULL_METADATA)
+        assert "other: User Tag B" in _tags(FULL_METADATA)
 
     def test_a_term_in_both_vocabularies_stays_distinguishable(self):
-        metadata = dict(FULL_METADATA, tags=["BDSM"], user_tags=["BDSM"])
-        assert _tags(metadata)[:2] == ["tag: BDSM", "other: BDSM"]
+        metadata = dict(FULL_METADATA, tags=["Shared Term"], user_tags=["Shared Term"])
+        assert _tags(metadata)[:2] == ["tag: Shared Term", "other: Shared Term"]
 
     def test_tags_element_is_omitted_when_every_vocabulary_is_empty(self):
         metadata = dict(FULL_METADATA, tags=[], user_tags=[], sections=[])
@@ -76,13 +76,13 @@ class TestNamespacedTags:
 
 class TestSeriesFromSection:
     def test_first_section_becomes_series(self):
-        assert _text(FULL_METADATA, "Series") == "Teen Titans"
+        assert _text(FULL_METADATA, "Series") == "Example Series"
 
     def test_every_section_is_listed_in_series_group(self):
-        assert _text(FULL_METADATA, "SeriesGroup") == "Teen Titans, DC Universe"
+        assert _text(FULL_METADATA, "SeriesGroup") == "Example Series, Example Universe"
 
     def test_title_is_the_series_when_no_section_is_listed(self):
-        assert _text(dict(FULL_METADATA, sections=[]), "Series") == "The Blame Game"
+        assert _text(dict(FULL_METADATA, sections=[]), "Series") == "Example Team Comic"
 
     def test_series_group_omitted_when_no_section_is_listed(self):
         assert _parse(dict(FULL_METADATA, sections=[])).find("SeriesGroup") is None
@@ -90,29 +90,29 @@ class TestSeriesFromSection:
 
 class TestAuthor:
     def test_author_fills_writer_and_penciller(self):
-        assert _text(FULL_METADATA, "Writer") == "Palcomix"
-        assert _text(FULL_METADATA, "Penciller") == "Palcomix"
+        assert _text(FULL_METADATA, "Writer") == "Example Author"
+        assert _text(FULL_METADATA, "Penciller") == "Example Author"
 
     def test_author_is_not_repeated_as_the_series(self):
         """The artist used to occupy Series as well; the section owns it now."""
-        assert _text(FULL_METADATA, "Series") != "Palcomix"
+        assert _text(FULL_METADATA, "Series") != "Example Author"
 
     def test_author_is_not_the_series_fallback_either(self):
-        assert _text(dict(FULL_METADATA, sections=[]), "Series") == "The Blame Game"
+        assert _text(dict(FULL_METADATA, sections=[]), "Series") == "Example Team Comic"
 
     def test_author_is_not_duplicated_into_tags(self):
-        assert not any("Palcomix" in entry for entry in _tags(FULL_METADATA))
+        assert not any("Example Author" in entry for entry in _tags(FULL_METADATA))
 
 
 class TestCharacters:
     def test_characters_are_comma_separated_in_page_order(self):
-        assert _text(FULL_METADATA, "Characters") == "Raven, Starfire, Cyborg, Robin, Beast Boy"
+        assert _text(FULL_METADATA, "Characters") == "Character One, Character Two, Character Three, Character Four, Character Five"
 
     def test_characters_omitted_when_the_page_lists_none(self):
         assert _parse(dict(FULL_METADATA, characters=[])).find("Characters") is None
 
     def test_characters_stay_out_of_tags(self):
-        assert not any("Raven" in entry for entry in _tags(FULL_METADATA))
+        assert not any("Character One" in entry for entry in _tags(FULL_METADATA))
 
 
 class TestMissingFieldsAreOmitted:
@@ -124,14 +124,14 @@ class TestMissingFieldsAreOmitted:
             del metadata[field]
             root = _parse(metadata)
             assert root.tag == "ComicInfo"
-            assert root.find("Title").text == "The Blame Game"
+            assert root.find("Title").text == "Example Team Comic"
 
     def test_none_is_treated_the_same_as_an_empty_list(self):
         metadata = dict(FULL_METADATA, characters=None, user_tags=None, sections=None)
         root = _parse(metadata)
         assert root.find("Characters") is None
         assert root.find("SeriesGroup") is None
-        assert _tags(metadata) == ["tag: BDSM", "tag: Mini Girl"]
+        assert _tags(metadata) == ["tag: Curated Tag A", "tag: Curated Tag B"]
 
     def test_empty_metadata_still_produces_a_valid_document(self):
         root = _parse({})
@@ -141,7 +141,7 @@ class TestMissingFieldsAreOmitted:
 
     def test_a_comic_with_only_user_tags_still_gets_a_tags_element(self):
         metadata = dict(FULL_METADATA, tags=[], sections=[])
-        assert _tags(metadata) == ["other: Force", "other: AI Generated"]
+        assert _tags(metadata) == ["other: User Tag A", "other: User Tag B"]
 
 
 class TestDocumentShape:

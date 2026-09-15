@@ -37,7 +37,7 @@ class TestProcessComicBlacklistScope:
     def test_direct_watch_bypasses_tag_blacklist(self):
         db_path = _make_db()
         try:
-            url = "https://example.com/comics/direct"
+            url = "https://multporn.net/comics/example_direct"
             # Pre-seed so remote_count == local_count -> needs_sync is False,
             # so _process_comic returns without touching the filesystem.
             db.upsert_comic(db_path, url)
@@ -58,7 +58,7 @@ class TestProcessComicBlacklistScope:
     def test_bulk_discovered_is_blacklisted(self):
         db_path = _make_db()
         try:
-            url = "https://example.com/comics/bulk"
+            url = "https://multporn.net/comics/example_bulk"
 
             with patch("main.mp.fetch_comic_metadata", return_value=FAKE_META):
                 _process_comic(
@@ -75,7 +75,7 @@ class TestProcessComicBlacklistScope:
     def test_default_is_direct_watch_false_still_blacklists(self):
         db_path = _make_db()
         try:
-            url = "https://example.com/comics/default"
+            url = "https://multporn.net/comics/example_default"
 
             with patch("main.mp.fetch_comic_metadata", return_value=FAKE_META):
                 _process_comic(None, url, CONFIG, db_path, 28 * 86400)

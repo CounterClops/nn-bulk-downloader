@@ -48,9 +48,9 @@ The easiest way is the **watchlist file** — just paste URLs, one per line:
 
 ```
 # watchlist.txt
-https://multporn.net/comics/some-comic
-https://multporn.net/comic_author/some-artist   # all their comics discovered automatically
-https://multporn.net/hentai_manga/another-comic
+https://multporn.net/comics/example_comic
+https://multporn.net/comic_author/example_artist   # all their comics discovered automatically
+https://multporn.net/hentai_manga/example_manga
 ```
 
 The URL type (`comic` or `artist`) is **detected automatically** from the URL path.  
@@ -96,8 +96,8 @@ The container uses three mounted volumes:
   "check_updated_feed": true,
   "updated_feed_pages": 2,
   "watched_items": [
-    {"type": "comic",  "url": "https://multporn.net/comics/my-favourite-comic"},
-    {"type": "artist", "url": "https://multporn.net/comic_author/some-artist"}
+    {"type": "comic",  "url": "https://multporn.net/comics/example_comic"},
+    {"type": "artist", "url": "https://multporn.net/comic_author/example_artist"}
   ]
 }
 ```
@@ -109,6 +109,7 @@ The container uses three mounted volumes:
 | `poll_interval_minutes` | `60` | Interval between polls in `--watch` mode |
 | `unwatched_retention_days` | `7` | Days a comic with no source left on the watchlist is kept before its database row is removed |
 | `exclude_censored` | `false` | Never download a comic whose thumbnail is blurred on a watched artist's page |
+| `delete_censored_files` | `false` | Delete the CBZ of every comic recorded as censored (needs `exclude_censored`) — a one-off cleanup switch |
 | `blacklisted_tags` | `[]` | Comics whose **curated** tags match any entry here are skipped |
 | `blacklisted_user_tags` | `[]` | Comics whose **user** tags match any entry here are skipped |
 | `check_updated_feed` | `true` | Fetch `/updated_comics` each cycle to avoid checking every comic |
@@ -122,8 +123,8 @@ The container uses three mounted volumes:
 
 | Type | Example URL |
 |---|---|
-| Single comic | `https://multporn.net/comics/some-title` |
-| Artist page | `https://multporn.net/comic_author/artist-name` |
+| Single comic | `https://multporn.net/comics/example_comic` |
+| Artist page | `https://multporn.net/comic_author/example_artist` |
 
 For `type: artist`, **all comics** on that artist's page are discovered automatically and
 added to the tracking database.
@@ -173,7 +174,7 @@ ComicInfo offers a single `Tags` field, so the vocabularies that share it are ma
 a namespace prefix, the way other providers' ComicInfo files do:
 
 ```xml
-<Tags>tag: Titfuck, tag: Oral, other: Ebony, other: AI Generated, parody: Others</Tags>
+<Tags>tag: Curated Tag A, tag: Curated Tag B, other: User Tag A, other: User Tag B, parody: Example Series</Tags>
 ```
 
 This keeps the site's curated `Tags:` distinguishable from the community-editable
@@ -231,6 +232,20 @@ after it was downloaded stops being updated, but its CBZ is left on disk.
 
 A directly watched comic that no watched artist lists has no listing to judge it by, so it
 downloads as normal.
+
+### Deleting censored comics already downloaded
+
+A comic downloaded before it was known to be censored keeps its CBZ. To clear those out,
+turn on `delete_censored_files` alongside `exclude_censored`. At the end of each poll
+cycle — after artist pages have been read and verdicts recorded — the CBZ of every comic
+recorded as censored is deleted. Turn it back off once the cleanup is done.
+
+- Only `.cbz` files inside `output_dir` are deleted; a stored path elsewhere is logged and
+  left alone.
+- The comic's row is kept, still marked censored, but reset to not downloaded — so if the
+  site ever un-blurs it, it downloads afresh.
+- A comic is only recorded as censored when a watched artist's page blurs it. Comics from
+  an artist no longer on the watchlist are never judged, so their files are not touched.
 
 ## Removing entries from the watchlist
 

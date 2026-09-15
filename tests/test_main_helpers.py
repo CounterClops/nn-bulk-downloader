@@ -99,26 +99,26 @@ class TestNeedsSync:
 
 class TestIsBlacklisted:
     def test_matching_tag(self):
-        assert _is_blacklisted(["Anal", "Gay", "Oral"], ["Gay"]) is True
+        assert _is_blacklisted(["Tag A", "Blocked Tag", "Tag C"], ["Blocked Tag"]) is True
 
     def test_no_match(self):
-        assert _is_blacklisted(["Anal", "Oral"], ["Gay"]) is False
+        assert _is_blacklisted(["Tag A", "Tag C"], ["Blocked Tag"]) is False
 
     def test_empty_tags(self):
-        assert _is_blacklisted([], ["Gay"]) is False
+        assert _is_blacklisted([], ["Blocked Tag"]) is False
 
     def test_empty_blacklist(self):
-        assert _is_blacklisted(["Anal", "Gay"], []) is False
+        assert _is_blacklisted(["Tag A", "Blocked Tag"], []) is False
 
     def test_case_insensitive_lower_tag(self):
-        assert _is_blacklisted(["gay"], ["Gay"]) is True
+        assert _is_blacklisted(["blocked tag"], ["Blocked Tag"]) is True
 
     def test_case_insensitive_upper_blacklist(self):
-        assert _is_blacklisted(["Gay"], ["GAY"]) is True
+        assert _is_blacklisted(["Blocked Tag"], ["BLOCKED TAG"]) is True
 
     def test_partial_match_not_triggered(self):
-        # "Gay" alone should not match a blacklist entry of "Gay Porn"
-        assert _is_blacklisted(["Gay"], ["Gay Porn"]) is False
+        # "Blocked" alone should not match a blacklist entry of "Blocked Tag"
+        assert _is_blacklisted(["Blocked"], ["Blocked Tag"]) is False
 
     def test_multiple_blacklist_entries_one_matches(self):
-        assert _is_blacklisted(["Oral", "Mini Girl"], ["AI Generated", "Mini Girl"]) is True
+        assert _is_blacklisted(["Tag A", "Blocked Tag"], ["Other Blocked Tag", "Blocked Tag"]) is True

@@ -6,8 +6,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Single comics
-# https://multporn.net/comics/my-favourite-comic
-# https://multporn.net/hentai_manga/some-manga
+# https://multporn.net/comics/example_comic
+# https://multporn.net/hentai_manga/example_manga
 
 # Artist / author pages (all comics are discovered automatically)
-# https://multporn.net/comic_author/some-artist
+# https://multporn.net/comic_author/example_artist

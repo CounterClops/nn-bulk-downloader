@@ -729,9 +729,83 @@ def run_once(config: Dict, db_path: str):
     # Per-comic last_checked timestamps are updated by _process_comic() via
     # update_comic_checked() — no global full-check timestamp needed.
 
+    # Runs after every artist read this cycle, so it acts on the freshest
+    # verdicts, and before cleanup, which may delete the rows recording paths.
+    _delete_censored_files(config, db_path)
+
     _backfill_hashes(config, db_path)
 
     _cleanup_unwatched(config, db_path, active_source_urls, artists.failed_urls)
+
+
+# ---------------------------------------------------------------------------
+# Censored file deletion
+# ---------------------------------------------------------------------------
+
+def _is_deletable_cbz(output_dir: str, cbz_path: str) -> bool:
+    """Return True only for a .cbz file inside *output_dir*.
+
+    Stored paths can be legacy absolute ones from an earlier output location;
+    anything outside the configured library is not this watcher's to delete.
+    """
+    library_root = os.path.realpath(output_dir)
+    resolved = os.path.realpath(cbz_path)
+    return (
+        resolved.lower().endswith(".cbz")
+        and os.path.commonpath([library_root, resolved]) == library_root
+        and resolved != library_root
+    )
+
+
+def _delete_censored_files(config: Dict, db_path: str):
+    """Delete the CBZ of every comic recorded as censored, when enabled.
+
+    Meant to be switched on to clear out comics downloaded before they were
+    known to be censored, then switched off again. It acts only alongside
+    exclude_censored: with exclusion off, any censored marks left in the
+    database are leftovers rather than current verdicts.
+    """
+    if not config.get("delete_censored_files", False):
+        return
+    if not config.get("exclude_censored", False):
+        logger.warning(
+            "delete_censored_files is on but exclude_censored is off — "
+            "no censored files deleted."
+        )
+        return
+
+    output_dir = config["output_dir"]
+    candidates = db.get_censored_comics_with_cbz(db_path)
+    logger.info(
+        f"delete_censored_files is on — checking {len(candidates)} censored comic(s) "
+        f"for files on disk. Turn it off once the cleanup is done."
+    )
+
+    deleted_count = 0
+    freed_bytes = 0
+    for comic in candidates:
+        cbz_path = _resolve_abs_cbz(output_dir, comic["cbz_path"])
+        if not os.path.isfile(cbz_path):
+            continue
+        if not _is_deletable_cbz(output_dir, cbz_path):
+            logger.warning(f"  Not deleting censored comic outside output_dir: {cbz_path}")
+            continue
+        try:
+            file_size = os.path.getsize(cbz_path)
+            os.remove(cbz_path)
+        except OSError as exc:
+            logger.error(f"  Failed to delete censored comic {cbz_path}: {exc}")
+            continue
+        db.forget_comic_download(db_path, comic["url"])
+        deleted_count += 1
+        freed_bytes += file_size
+        logger.info(f"  Deleted censored comic: {cbz_path}")
+
+    if deleted_count:
+        logger.info(
+            f"Deleted {deleted_count} censored comic file(s), "
+            f"freeing {freed_bytes / 1e9:.2f} GB."
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -45,30 +45,30 @@ def _insert_raw(db_path: str, url: str, **fields):
 
 class TestNormaliseUrl:
     def test_strips_query_string(self):
-        assert normalise_url("https://multporn.net/comics/foo?r=1") == \
-            "https://multporn.net/comics/foo"
+        assert normalise_url("https://multporn.net/comics/example_foo?r=1") == \
+            "https://multporn.net/comics/example_foo"
 
     def test_strips_multi_valued_query_string(self):
-        assert normalise_url("https://multporn.net/comics/foo?rule34=2") == \
-            "https://multporn.net/comics/foo"
+        assert normalise_url("https://multporn.net/comics/example_foo?rule34=2") == \
+            "https://multporn.net/comics/example_foo"
 
     def test_strips_fragment(self):
-        assert normalise_url("https://multporn.net/comics/foo#page3") == \
-            "https://multporn.net/comics/foo"
+        assert normalise_url("https://multporn.net/comics/example_foo#page3") == \
+            "https://multporn.net/comics/example_foo"
 
     def test_strips_trailing_slash(self):
-        assert normalise_url("https://multporn.net/comics/foo/") == \
-            "https://multporn.net/comics/foo"
+        assert normalise_url("https://multporn.net/comics/example_foo/") == \
+            "https://multporn.net/comics/example_foo"
 
     def test_leaves_clean_urls_untouched(self):
-        url = "https://multporn.net/comics/foo"
+        url = "https://multporn.net/comics/example_foo"
         assert normalise_url(url) == url
 
     def test_handles_relative_hrefs(self):
-        assert normalise_url("/comics/foo?r=1") == "/comics/foo"
+        assert normalise_url("/comics/example_foo?r=1") == "/comics/example_foo"
 
     def test_is_idempotent(self):
-        once = normalise_url("https://multporn.net/comics/foo/?r=1#x")
+        once = normalise_url("https://multporn.net/comics/example_foo/?r=1#x")
         assert normalise_url(once) == once
 
 
@@ -76,8 +76,8 @@ class TestNormaliseUrl:
 # Reconciling rows recorded before canonicalisation
 # ---------------------------------------------------------------------------
 
-BARE = "https://example.com/comics/dup"
-VARIANT = "https://example.com/comics/dup?r=1"
+BARE = "https://multporn.net/comics/example_dup"
+VARIANT = "https://multporn.net/comics/example_dup?r=1"
 
 
 class TestStoredUrlNormalisation:
@@ -164,7 +164,7 @@ class TestStoredUrlNormalisation:
         try:
             _insert_raw(db_path, BARE, page_count=5)
             _insert_raw(db_path, VARIANT, page_count=5)
-            _insert_raw(db_path, "https://example.com/comics/dup?r=2", page_count=5)
+            _insert_raw(db_path, "https://multporn.net/comics/example_dup?r=2", page_count=5)
             _rewind_migration_marker(db_path)
 
             db.init_db(db_path)
@@ -178,14 +178,14 @@ class TestStoredUrlNormalisation:
     def test_leaves_distinct_comics_alone(self):
         db_path = _make_db()
         try:
-            _insert_raw(db_path, "https://example.com/comics/one", page_count=1)
-            _insert_raw(db_path, "https://example.com/comics/two", page_count=2)
+            _insert_raw(db_path, "https://multporn.net/comics/example_one", page_count=1)
+            _insert_raw(db_path, "https://multporn.net/comics/example_two", page_count=2)
             _rewind_migration_marker(db_path)
 
             db.init_db(db_path)
 
-            assert db.get_comic(db_path, "https://example.com/comics/one")["page_count"] == 1
-            assert db.get_comic(db_path, "https://example.com/comics/two")["page_count"] == 2
+            assert db.get_comic(db_path, "https://multporn.net/comics/example_one")["page_count"] == 1
+            assert db.get_comic(db_path, "https://multporn.net/comics/example_two")["page_count"] == 2
         finally:
             os.unlink(db_path)
 

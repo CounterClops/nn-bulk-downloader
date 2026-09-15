@@ -15,12 +15,12 @@ import main
 from modules import db
 from modules.multporn import ArtistListing
 
-ARTIST_A = "https://multporn.net/authors_comics/artist_a"
-ARTIST_B = "https://multporn.net/authors_comics/artist_b"
-SHARED = "https://multporn.net/comics/shared"
-ONLY_A = "https://multporn.net/comics/only_a"
-ONLY_B = "https://multporn.net/comics/only_b"
-DIRECT = "https://multporn.net/comics/direct"
+ARTIST_A = "https://multporn.net/authors_comics/example_artist_a"
+ARTIST_B = "https://multporn.net/authors_comics/example_artist_b"
+SHARED = "https://multporn.net/comics/example_shared"
+ONLY_A = "https://multporn.net/comics/example_only_a"
+ONLY_B = "https://multporn.net/comics/example_only_b"
+DIRECT = "https://multporn.net/comics/example_direct"
 
 LISTINGS = {
     ARTIST_A: [SHARED, ONLY_A],

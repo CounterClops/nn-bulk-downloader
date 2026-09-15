@@ -59,10 +59,10 @@ class TestFetchComicMetadataMpUrl:
     """Verify that /mp<nodeid> URLs select field_files for the Juicebox query."""
 
     def test_mp_url_uses_field_files_in_juicebox_query(self):
-        node_id = "99999"
+        node_id = "000000002"
         img_urls = [
-            "https://cdn.example.com/page1.jpg",
-            "https://cdn.example.com/page2.jpg",
+            "https://multporn.net/sites/default/files/comics/example_comic/example_page1.jpg",
+            "https://multporn.net/sites/default/files/comics/example_comic/example_page2.jpg",
         ]
 
         session = _RecordingSession(
@@ -71,7 +71,7 @@ class TestFetchComicMetadataMpUrl:
         )
 
         with patch("modules.multporn.sleep"):
-            meta = fetch_comic_metadata(session, "https://multporn.net/mp99999")
+            meta = fetch_comic_metadata(session, "https://multporn.net/mp000000002")
 
         assert meta["image_urls"] == img_urls
         assert meta["page_count"] == 2
@@ -83,14 +83,14 @@ class TestFetchComicMetadataMpUrl:
         )
 
     def test_mp_url_juicebox_url_contains_node_id(self):
-        node_id = "12345"
+        node_id = "000000003"
         session = _RecordingSession(
             _FakeResponse(text=_html_with_shortlink(node_id)),
-            _FakeResponse(content=_juicebox_xml("https://cdn.example.com/p1.jpg")),
+            _FakeResponse(content=_juicebox_xml("https://multporn.net/sites/default/files/comics/example_comic/example_p1.jpg")),
         )
 
         with patch("modules.multporn.sleep"):
-            fetch_comic_metadata(session, "https://multporn.net/mp12345")
+            fetch_comic_metadata(session, "https://multporn.net/mp000000003")
 
         juicebox_url = session.calls[1]
         assert f"/node/{node_id}/" in juicebox_url

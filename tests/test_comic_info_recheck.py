@@ -48,7 +48,7 @@ def _is_due(comic: dict, now: float) -> bool:
 
 class TestRecheckIsQueued:
     def test_recently_checked_comics_are_not_due_before_the_recheck(self):
-        db_path = _legacy_db_with_comics("https://multporn.net/comics/a")
+        db_path = _legacy_db_with_comics("https://multporn.net/comics/example_a")
         try:
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
@@ -59,7 +59,7 @@ class TestRecheckIsQueued:
             os.unlink(db_path)
 
     def test_every_comic_is_due_after_init(self):
-        urls = [f"https://multporn.net/comics/comic_{index}" for index in range(5)]
+        urls = [f"https://multporn.net/comics/example_comic_{index}" for index in range(5)]
         db_path = _legacy_db_with_comics(*urls)
         try:
             db.init_db(db_path)
@@ -72,17 +72,17 @@ class TestRecheckIsQueued:
 
     def test_page_counts_and_paths_are_left_alone(self):
         """The recheck only makes comics due; it must not look undownloaded."""
-        db_path = _legacy_db_with_comics("https://multporn.net/comics/a")
+        db_path = _legacy_db_with_comics("https://multporn.net/comics/example_a")
         try:
             db.init_db(db_path)
-            comic = db.get_comic(db_path, "https://multporn.net/comics/a")
+            comic = db.get_comic(db_path, "https://multporn.net/comics/example_a")
             assert comic["page_count"] == 10
         finally:
             os.unlink(db_path)
 
     def test_censored_comics_stay_out_of_the_recheck(self):
         """Their verdict lives only on artist listings, so a page fetch learns nothing."""
-        url = "https://multporn.net/comics/censored"
+        url = "https://multporn.net/comics/example_censored"
         db_path = _legacy_db_with_comics(url)
         try:
             db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason=db.CENSORED_SKIP_REASON)
@@ -94,7 +94,7 @@ class TestRecheckIsQueued:
 
 class TestRecheckRunsOnce:
     def test_a_second_init_does_not_queue_it_again(self):
-        url = "https://multporn.net/comics/a"
+        url = "https://multporn.net/comics/example_a"
         db_path = _legacy_db_with_comics(url)
         try:
             db.init_db(db_path)
@@ -110,7 +110,7 @@ class TestRecheckRunsOnce:
             os.unlink(db_path)
 
     def test_the_queue_is_recorded_in_settings(self):
-        db_path = _legacy_db_with_comics("https://multporn.net/comics/a")
+        db_path = _legacy_db_with_comics("https://multporn.net/comics/example_a")
         try:
             assert db.get_setting(db_path, db.COMIC_INFO_RECHECK_KEY) is None
             db.init_db(db_path)
@@ -121,7 +121,7 @@ class TestRecheckRunsOnce:
     def test_an_interrupted_run_leaves_unchecked_comics_due(self):
         """Only comics actually checked are re-stamped, so a run stopped part-way
         still reaches the rest next time."""
-        checked, unchecked = "https://multporn.net/comics/done", "https://multporn.net/comics/pending"
+        checked, unchecked = "https://multporn.net/comics/example_done", "https://multporn.net/comics/example_pending"
         db_path = _legacy_db_with_comics(checked, unchecked)
         try:
             db.init_db(db_path)

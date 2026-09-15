@@ -13,19 +13,19 @@ from main import _process_comic
 from modules import db
 
 BASE_META = {
-    "title": "Next Door Tailz",
-    "author": "Jmoz Comix",
-    "sections": ["Others", "Ongoings"],
+    "title": "Example User Tagged Comic",
+    "author": "Example Author",
+    "sections": ["Example Series", "Example Universe"],
     "characters": [],
-    "tags": ["Titfuck", "Oral"],
-    "user_tags": ["Ebony", "AI Generated", "AI Slop"],
+    "tags": ["Curated Tag A", "Curated Tag B"],
+    "user_tags": ["User Tag A", "Blocked User Tag", "User Tag C"],
     "language": "en",
     "image_urls": [],
     "page_count": 1,
     "node_id": "1",
 }
 
-URL = "https://multporn.net/comics/next_door_tailz"
+URL = "https://multporn.net/comics/example_user_tagged_comic"
 
 
 def _make_db() -> str:
@@ -66,7 +66,7 @@ class TestUserTagBlacklist:
     def test_matching_user_tag_skips_the_comic(self):
         db_path = _make_db()
         try:
-            row = _run(db_path, _config(blacklisted_user_tags=["AI Generated"]))
+            row = _run(db_path, _config(blacklisted_user_tags=["Blocked User Tag"]))
             assert row["is_blacklisted"] == 1
             assert row["skip_reason"] == db.USER_TAG_SKIP_REASON
         finally:
@@ -75,7 +75,7 @@ class TestUserTagBlacklist:
     def test_match_is_case_insensitive(self):
         db_path = _make_db()
         try:
-            row = _run(db_path, _config(blacklisted_user_tags=["ai generated"]))
+            row = _run(db_path, _config(blacklisted_user_tags=["blocked user tag"]))
             assert row["is_blacklisted"] == 1
         finally:
             os.unlink(db_path)
@@ -92,10 +92,10 @@ class TestUserTagBlacklist:
             os.unlink(db_path)
 
     def test_curated_blacklist_does_not_match_user_tags(self):
-        """'AI Generated' here is a user tag, so the curated list must ignore it."""
+        """'Blocked User Tag' here is a user tag, so the curated list must ignore it."""
         db_path = _make_db()
         try:
-            row = _run(db_path, _config(blacklisted_tags=["AI Generated"]))
+            row = _run(db_path, _config(blacklisted_tags=["Blocked User Tag"]))
             assert row["is_blacklisted"] == 0
         finally:
             os.unlink(db_path)
@@ -103,7 +103,7 @@ class TestUserTagBlacklist:
     def test_user_blacklist_does_not_match_curated_tags(self):
         db_path = _make_db()
         try:
-            row = _run(db_path, _config(blacklisted_user_tags=["Titfuck"]))
+            row = _run(db_path, _config(blacklisted_user_tags=["Curated Tag A"]))
             assert row["is_blacklisted"] == 0
         finally:
             os.unlink(db_path)
@@ -112,7 +112,7 @@ class TestUserTagBlacklist:
         db_path = _make_db()
         try:
             row = _run(
-                db_path, _config(blacklisted_user_tags=["AI Generated"]),
+                db_path, _config(blacklisted_user_tags=["Blocked User Tag"]),
                 is_direct_watch=True,
             )
             assert row["is_blacklisted"] == 0
@@ -124,7 +124,7 @@ class TestUserTagBlacklist:
         try:
             meta = dict(BASE_META)
             del meta["user_tags"]
-            row = _run(db_path, _config(blacklisted_user_tags=["AI Generated"]), meta=meta)
+            row = _run(db_path, _config(blacklisted_user_tags=["Blocked User Tag"]), meta=meta)
             assert row["is_blacklisted"] == 0
         finally:
             os.unlink(db_path)

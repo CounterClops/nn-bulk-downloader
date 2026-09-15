@@ -26,7 +26,7 @@ class TestDownloadImageRetry:
         session = MagicMock()
         session.get.return_value = _make_response(200, b"image_data")
 
-        result = download_image(session, "https://example.com/img.jpg")
+        result = download_image(session, "https://multporn.net/sites/default/files/comics/example_comic/example_page.jpg")
 
         assert result == b"image_data"
         assert session.get.call_count == 1
@@ -42,7 +42,7 @@ class TestDownloadImageRetry:
         session.get.side_effect = [fail_resp, ok_resp]
 
         with patch("modules.multporn.sleep"):
-            result = download_image(session, "https://example.com/img.jpg")
+            result = download_image(session, "https://multporn.net/sites/default/files/comics/example_comic/example_page.jpg")
 
         assert result == b"ok"
         assert session.get.call_count == 2
@@ -57,7 +57,7 @@ class TestDownloadImageRetry:
 
         with patch("modules.multporn.sleep"):
             with pytest.raises(requests.HTTPError):
-                download_image(session, "https://example.com/img.jpg")
+                download_image(session, "https://multporn.net/sites/default/files/comics/example_comic/example_page.jpg")
 
         assert session.get.call_count == 1
 
@@ -71,7 +71,7 @@ class TestDownloadImageRetry:
 
         with patch("modules.multporn.sleep"):
             with pytest.raises(requests.HTTPError):
-                download_image(session, "https://example.com/img.jpg")
+                download_image(session, "https://multporn.net/sites/default/files/comics/example_comic/example_page.jpg")
 
         assert session.get.call_count == MAX_DOWNLOAD_RETRIES
 
@@ -84,7 +84,7 @@ class TestDownloadImageRetry:
         ]
 
         with patch("modules.multporn.sleep"):
-            result = download_image(session, "https://example.com/img.jpg")
+            result = download_image(session, "https://multporn.net/sites/default/files/comics/example_comic/example_page.jpg")
 
         assert result == b"data"
         assert session.get.call_count == 2
@@ -99,6 +99,6 @@ class TestDownloadImageRetry:
         session.get.side_effect = [fail_resp, ok_resp]
 
         with patch("modules.multporn.sleep") as mock_sleep:
-            download_image(session, "https://example.com/img.jpg")
+            download_image(session, "https://multporn.net/sites/default/files/comics/example_comic/example_page.jpg")
 
         mock_sleep.assert_called_once_with(DOWNLOAD_RETRY_DELAY)

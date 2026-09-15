@@ -15,9 +15,9 @@ import main
 from main import _process_comic
 from modules import db
 
-MINI_MALE_META = {
+FORMERLY_CENSORED_TAG_META = {
     "title": "Tagged Comic",
-    "tags": ["Oral", "Mini Male", "Big Tits"],
+    "tags": ["Curated Tag A", "Formerly Censored Tag", "Curated Tag B"],
     "author": "Some Author",
     "language": "en",
     "image_urls": [],
@@ -56,15 +56,15 @@ def _rewind_cleanup_marker(db_path: str):
 # ---------------------------------------------------------------------------
 
 class TestNoTagBasedCensoring:
-    def test_mini_male_tag_is_not_skipped(self):
+    def test_formerly_censored_tag_is_not_skipped(self):
         """A tag the site has not blurred must not be treated as censored."""
         db_path = _make_db()
         try:
-            url = "https://example.com/comics/mini_male"
+            url = "https://multporn.net/comics/example_formerly_censored_tag"
             db.upsert_comic(db_path, url)
             db.update_comic_checked(db_path, url, 1, "[]", "x.cbz", "Tagged Comic", "1")
 
-            with patch("main.mp.fetch_comic_metadata", return_value=MINI_MALE_META):
+            with patch("main.mp.fetch_comic_metadata", return_value=FORMERLY_CENSORED_TAG_META):
                 _process_comic(None, url, CONFIG, db_path, 28 * 86400)
 
             row = db.get_comic(db_path, url)
@@ -85,7 +85,7 @@ class TestLegacyCensoredCleanup:
     def test_clears_censored_rows_on_init(self):
         db_path = _make_db()
         try:
-            url = "https://example.com/comics/a"
+            url = "https://multporn.net/comics/example_a"
             db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason="censored")
             _rewind_cleanup_marker(db_path)
 
@@ -100,19 +100,19 @@ class TestLegacyCensoredCleanup:
     def test_leaves_other_skip_reasons_alone(self):
         db_path = _make_db()
         try:
-            db.upsert_comic(db_path, "https://example.com/comics/t",
+            db.upsert_comic(db_path, "https://multporn.net/comics/example_t",
                             is_blacklisted=1, skip_reason="tag")
-            db.upsert_comic(db_path, "https://example.com/comics/l",
+            db.upsert_comic(db_path, "https://multporn.net/comics/example_l",
                             is_blacklisted=1, skip_reason="language")
             _rewind_cleanup_marker(db_path)
 
             db.init_db(db_path)
 
-            tag_row = db.get_comic(db_path, "https://example.com/comics/t")
+            tag_row = db.get_comic(db_path, "https://multporn.net/comics/example_t")
             assert tag_row["is_blacklisted"] == 1
             assert tag_row["skip_reason"] == "tag"
 
-            lang_row = db.get_comic(db_path, "https://example.com/comics/l")
+            lang_row = db.get_comic(db_path, "https://multporn.net/comics/example_l")
             assert lang_row["is_blacklisted"] == 1
             assert lang_row["skip_reason"] == "language"
         finally:
@@ -124,7 +124,7 @@ class TestLegacyCensoredCleanup:
         try:
             db.init_db(db_path)  # cleanup runs and is recorded here
 
-            url = "https://example.com/comics/later"
+            url = "https://multporn.net/comics/example_later"
             db.upsert_comic(db_path, url, is_blacklisted=1, skip_reason="censored")
 
             db.init_db(db_path)
@@ -140,8 +140,8 @@ class TestLegacyCensoredCleanup:
 # Reconciling the blur verdict against an artist listing
 # ---------------------------------------------------------------------------
 
-BLURRED = "https://example.com/comics/blurred"
-CLEAN = "https://example.com/comics/clean"
+BLURRED = "https://multporn.net/comics/example_blurred"
+CLEAN = "https://multporn.net/comics/example_clean"
 
 
 class TestSyncCensoredSkips:
@@ -206,7 +206,7 @@ class TestSyncCensoredSkips:
     def test_comics_outside_the_listing_are_untouched(self):
         db_path = _make_db()
         try:
-            other = "https://example.com/comics/other_artist"
+            other = "https://multporn.net/comics/example_other_artist"
             db.upsert_comic(db_path, other, is_blacklisted=1, skip_reason="censored")
             db.upsert_comic(db_path, CLEAN)
 

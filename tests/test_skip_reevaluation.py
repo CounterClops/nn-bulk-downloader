@@ -13,7 +13,7 @@ INTERVAL_S = 28 * 86400
 
 CLEAN_META = {
     "title": "Clean Comic",
-    "tags": ["Oral"],
+    "tags": ["Curated Tag A"],
     "author": "Some Author",
     "language": "en",
     "image_urls": [],
@@ -89,7 +89,7 @@ class TestMarkSkipped:
         """Without a timestamp the comic would be re-fetched on every poll."""
         db_path = _make_db()
         try:
-            url = "https://example.com/comics/skipped"
+            url = "https://multporn.net/comics/example_skipped"
             before = time.time()
             _mark_skipped(db_path, url, "Skipped Comic", ["Some Tag"], "tag")
 
@@ -109,7 +109,7 @@ class TestStaleSkipIsLifted:
     def test_process_comic_clears_skip_when_metadata_now_passes(self):
         db_path = _make_db()
         try:
-            url = "https://example.com/comics/was_skipped"
+            url = "https://multporn.net/comics/example_was_skipped"
             _mark_skipped(db_path, url, "Clean Comic", ["Blacklisted Tag"], "tag")
 
             # The site has since dropped the offending tag.
@@ -125,7 +125,7 @@ class TestStaleSkipIsLifted:
     def test_skip_is_reapplied_when_metadata_still_matches(self):
         db_path = _make_db()
         try:
-            url = "https://example.com/comics/still_skipped"
+            url = "https://multporn.net/comics/example_still_skipped"
             _mark_skipped(db_path, url, "Dirty Comic", ["Blacklisted Tag"], "tag")
 
             still_tagged = dict(CLEAN_META, tags=["Blacklisted Tag"])
@@ -142,7 +142,7 @@ class TestStaleSkipIsLifted:
         """Only artist discovery may revisit the site's blur verdict."""
         db_path = _make_db()
         try:
-            url = "https://example.com/comics/blurred"
+            url = "https://multporn.net/comics/example_blurred"
             _mark_skipped(db_path, url, "Clean Comic", [], "censored")
 
             with patch("main.mp.fetch_comic_metadata", return_value=CLEAN_META):
@@ -157,7 +157,7 @@ class TestStaleSkipIsLifted:
     def test_language_skip_is_lifted_when_language_changes(self):
         db_path = _make_db()
         try:
-            url = "https://example.com/comics/was_russian"
+            url = "https://multporn.net/comics/example_was_russian"
             _mark_skipped(db_path, url, "Clean Comic", [], "language")
 
             with patch("main.mp.fetch_comic_metadata", return_value=CLEAN_META):

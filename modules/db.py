@@ -442,6 +442,37 @@ def update_comic_hash(db_path: str, url: str, cbz_hash: str):
     conn.close()
 
 
+def get_censored_comics_with_cbz(db_path: str) -> List[Dict]:
+    """Return censored comics that still record a CBZ path (url and cbz_path only)."""
+    conn = _connect(db_path)
+    rows = conn.execute(
+        "SELECT url, cbz_path FROM tracked_comics WHERE skip_reason = ? AND cbz_path IS NOT NULL",
+        (CENSORED_SKIP_REASON,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def forget_comic_download(db_path: str, url: str):
+    """Record that a comic's CBZ no longer exists, leaving its skip untouched.
+
+    Page count and path are reset as for a comic never downloaded, so if the
+    skip is ever lifted the comic downloads afresh rather than being judged up
+    to date against a file that is gone.
+    """
+    conn = _connect(db_path)
+    with conn:
+        conn.execute(
+            """
+            UPDATE tracked_comics
+               SET page_count = 0, cbz_path = NULL, cbz_hash = NULL, last_synced = NULL
+             WHERE url = ?
+            """,
+            (url,),
+        )
+    conn.close()
+
+
 def get_comics_missing_hash(db_path: str) -> List[Dict]:
     """Return comics that have a cbz_path but no cbz_hash yet (url and cbz_path only)."""
     conn = _connect(db_path)

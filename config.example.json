@@ -8,6 +8,7 @@
   "blacklisted_user_tags": [],
   "allowed_languages": ["en"],
   "exclude_censored": false,
+  "delete_censored_files": false,
   "check_updated_feed": true,
   "updated_feed_pages": 2,
   "watched_items": []
